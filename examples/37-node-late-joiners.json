@@ -1,0 +1,79 @@
+{
+  "_comment": [
+    "Reproduces the discovery trials: a seed plus 35 members at T0, one late",
+    "joiner a minute in and another five minutes in. Run with",
+    "  HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness up"
+  ],
+
+  "module": {
+    "flake": "git+https://github.com/logos-co/logos-delivery-module",
+    "ref": "master"
+  },
+
+  "overrides": {
+    "logos-logoscore-cli": { "rev": "665ac28bc77f45e3c610f40fef975a12609de531" }
+  },
+
+  "network": {
+    "subnet": "10.0.0.0/8",
+    "clusterId": 42,
+    "shardsInNetwork": 1
+  },
+
+  "groups": [
+    {
+      "name": "seed",
+      "kind": "seed",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.0.0.10",
+      "port": 44001,
+      "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
+      "peerId": "16Uiu2HAm4gVVMqAzg2gT5cBii3qfaXykUJoB7jyHgAu71RuiELmz",
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-server=true",
+        "--metrics-server-address=0.0.0.0",
+        "--metrics-server-port=8008",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG"
+      ]
+    },
+    {
+      "name": "members",
+      "kind": "member",
+      "count": 35,
+      "startAfter": 0,
+      "jitter": 8,
+      "config": "member.json.tpl",
+      "env": { "LOOKUP_INTERVAL": "15" }
+    },
+    {
+      "name": "late-1min",
+      "kind": "member",
+      "count": 1,
+      "startAfter": 60,
+      "jitter": 0,
+      "config": "member.json.tpl",
+      "env": { "LOOKUP_INTERVAL": "15" }
+    },
+    {
+      "name": "late-5min",
+      "kind": "member",
+      "count": 1,
+      "startAfter": 300,
+      "jitter": 0,
+      "config": "member.json.tpl",
+      "env": { "LOOKUP_INTERVAL": "15" }
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+# Monitoring and the network. Every node service is generated from harness.json
+# into out/compose.groups.yml -- see `harness gen`.
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./out:/etc/prometheus/targets:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      sim:
+        ipv4_address: 10.0.0.11
+
+  grafana:
+    image: grafana/grafana:11.6.6
+    environment:
+      # Local harness: no login, dashboards are provisioned read-write.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/discovery-overview.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      sim:
+        ipv4_address: 10.0.0.12
+
+networks:
+  sim:
+    ipam:
+      config:
+        - subnet: ${SUBNET:-10.0.0.0/8}
