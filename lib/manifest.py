@@ -25,6 +25,11 @@ def _fail(msg):
     sys.exit(1)
 
 
+def _is_sha(s):
+    """A full git object name. Short shas are not accepted by nix as a rev."""
+    return len(s) == 40 and all(c in "0123456789abcdefABCDEF" for c in s)
+
+
 def load(path):
     if not os.path.exists(path):
         _fail(f"no manifest at {path}")
@@ -37,6 +42,27 @@ def load(path):
     mod = m.get("module") or {}
     if not mod.get("flake"):
         _fail("manifest.module.flake is required")
+
+    # Env wins over the manifest, so one manifest can be pointed at any module
+    # build without editing it:
+    #   HARNESS_MODULE_FLAKE  a different repository
+    #   HARNESS_MODULE_REV    a commit, the full 40-char sha
+    #   HARNESS_MODULE_REF    a branch or tag -- or a full sha, which is
+    #                         recognised and used as a rev, since `ref=<sha>`
+    #                         is not something nix accepts
+    if os.environ.get("HARNESS_MODULE_FLAKE"):
+        mod["flake"] = os.environ["HARNESS_MODULE_FLAKE"]
+    env_ref = os.environ.get("HARNESS_MODULE_REF")
+    env_rev = os.environ.get("HARNESS_MODULE_REV")
+    if env_ref and not env_rev and _is_sha(env_ref):
+        env_rev, env_ref = env_ref, None
+    if env_rev:
+        mod["rev"] = env_rev
+        mod.pop("ref", None)
+    elif env_ref:
+        mod["ref"] = env_ref
+        mod.pop("rev", None)
+
     if not (mod.get("ref") or mod.get("rev")):
         mod["ref"] = "master"
 

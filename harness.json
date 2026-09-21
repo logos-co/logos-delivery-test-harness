@@ -6,27 +6,27 @@
   ],
 
   "module": {
+    "_comment": [
+      "Override without editing this file:",
+      "  HARNESS_MODULE_REF=<branch|tag|full-sha>  HARNESS_MODULE_REV=<full-sha>",
+      "master does not carry the plugin-hosted discovery work, and a node built",
+      "from it rejects the seed args and member config below, so the default is",
+      "the branch that does."
+    ],
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
-    "ref": "master"
+    "ref": "poc-apply-discovery-plugin-with-dep"
   },
 
   "overrides": {
     "_comment": [
-      "Anything the chosen module ref does not pin has to be pinned here.",
-      "master of logos-delivery-module pins only logos-delivery, so the three",
-      "components below are the harness's own. A module ref that does pin them",
-      "(the plugin-discovery branches) derives them instead -- drop the entry.",
-      "logos-logoscore-cli: those branches lock 454e0696, the harness has always",
-      "run 665ac28b; keep the override until you decide to follow the module."
+      "Only what the chosen module ref cannot supply, or what we deliberately",
+      "differ on. This branch pins libp2p_module and openmetrics-module at the",
+      "revisions the harness would have chosen anyway, so both are derived.",
+      "logos-logoscore-cli is the one standing disagreement: the branch locks",
+      "454e0696, the harness has always run 665ac28b. Drop this entry to follow",
+      "the module. A ref that pins none of them (master) needs all three back,",
+      "each with a full `flake` reference -- `harness.sh resolve` says which."
     ],
-    "libp2p_module": {
-      "flake": "git+https://github.com/logos-co/logos-libp2p-module",
-      "rev": "ec7b8f583781365389910da8b81688239661805d"
-    },
-    "openmetrics-module": {
-      "flake": "github:logos-co/openmetrics-module",
-      "rev": "f8da2a025cc2ff0ee2e284df5dc227fcfb0d6b68"
-    },
     "logos-logoscore-cli": {
       "flake": "github:logos-co/logos-logoscore-cli",
       "rev": "665ac28bc77f45e3c610f40fef975a12609de531"

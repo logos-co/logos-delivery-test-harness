@@ -1,6 +1,6 @@
 # logos-delivery-test-harness
 
-A container fleet for exercising logos-delivery peer discovery: a seed, any number
+A container fleet for exercising logos-delivery: a seed, any number
 of plugin-hosted member nodes, Prometheus and provisioned Grafana dashboards.
 
 Everything is built by nix from named git revisions, so a manifest plus the
@@ -37,9 +37,31 @@ flake lock, so the harness always builds a coherent set:
 | `openmetrics-module` | as above |
 | `logos-logoscore-cli` | as above |
 
-**What a ref pins differs by ref.** `master` of logos-delivery-module pins only
-`logos-delivery` — the other three arrived with the plugin-discovery work and
-exist on those branches. So the shipped manifest pins them itself:
+### Choosing the module build
+
+Without editing the manifest:
+
+```bash
+HARNESS_MODULE_REF=my-branch          ./harness.sh build   # branch
+HARNESS_MODULE_REF=v1.4.0             ./harness.sh build   # tag
+HARNESS_MODULE_REF=ae967a12…78b9b321d ./harness.sh build   # commit (full sha)
+HARNESS_MODULE_REV=ae967a12…78b9b321d ./harness.sh build   # commit, explicitly
+HARNESS_MODULE_FLAKE=git+https://…/my-fork ./harness.sh build
+```
+
+`HARNESS_MODULE_REF` takes a branch, a tag, **or** a full 40-character sha — a
+sha is recognised and passed as a `rev`, because nix does not accept one as a
+`ref`. Short shas are not: give the full object name, or use a tag.
+
+### Overrides
+
+**What a ref pins differs by ref.** The default branch pins four of the five, so
+only one override ships — `logos-logoscore-cli`, which is a standing decision
+rather than a gap: the module locks `454e0696` while the harness has always run
+`665ac28b`. Drop the entry to follow the module.
+
+`master`, by contrast, pins only `logos-delivery`, so building from it needs the
+other three supplied here, each with a full `flake` reference:
 
 ```json
 "overrides": {
@@ -50,13 +72,14 @@ exist on those branches. So the shipped manifest pins them itself:
 
 An override carrying a full `flake` stands alone and needs no lock entry; one
 carrying only `rev` swaps the revision of a component the module does pin.
-Point `module.ref` at a branch that pins all five and you can delete the
-overrides entirely — `harness.sh resolve` will say so by reporting each component's
-source as `module-lock` instead of `override`.
+`harness.sh resolve` reports each component's source as `module-lock`,
+`override` or `manifest`, so what is derived and what is imposed is visible
+before anything is built.
 
-One of them is a standing decision rather than a gap: the module's discovery
-branches lock `logos-logoscore-cli` at `454e0696`, while the harness has always
-run `665ac28b`. The override keeps that behaviour; drop it to follow the module.
+> A node built from `master` rejects the seed arguments and member config in the
+> shipped manifest: the discovery flags it uses (`--enable-kad-discovery`,
+> `--max-pure-libp2p-peers`, `plugin-kad-discovery`) exist only on the branches
+> carrying the plugin-discovery work. Change both together, or neither.
 
 ### Groups
 

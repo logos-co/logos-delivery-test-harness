@@ -7,11 +7,14 @@
 
   "module": {
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
-    "ref": "master"
+    "ref": "poc-apply-discovery-plugin-with-dep"
   },
 
   "overrides": {
-    "logos-logoscore-cli": { "rev": "665ac28bc77f45e3c610f40fef975a12609de531" }
+    "logos-logoscore-cli": {
+      "flake": "github:logos-co/logos-logoscore-cli",
+      "rev": "665ac28bc77f45e3c610f40fef975a12609de531"
+    }
   },
 
   "network": {
