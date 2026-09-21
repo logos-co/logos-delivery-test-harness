@@ -37,21 +37,44 @@ flake lock, so the harness always builds a coherent set:
 | `openmetrics-module` | as above |
 | `logos-logoscore-cli` | as above |
 
-### Choosing the module build
+### Choosing revisions from the environment
 
-Without editing the manifest:
+Every component takes `<PREFIX>_REF`, `<PREFIX>_REV` and `<PREFIX>_FLAKE`:
+
+| Component | Prefix |
+|---|---|
+| logos-delivery-module | `DELIVERY_MODULE` |
+| logos-delivery | `DELIVERY` |
+| libp2p_module | `LIBP2P_MODULE` |
+| openmetrics-module | `OPENMETRICS_MODULE` |
+| logos-logoscore-cli | `LOGOSCORE_CLI` |
 
 ```bash
-HARNESS_MODULE_REF=my-branch          ./harness.sh build   # branch
-HARNESS_MODULE_REF=v1.4.0             ./harness.sh build   # tag
-HARNESS_MODULE_REF=ae967a12…78b9b321d ./harness.sh build   # commit (full sha)
-HARNESS_MODULE_REV=ae967a12…78b9b321d ./harness.sh build   # commit, explicitly
-HARNESS_MODULE_FLAKE=git+https://…/my-fork ./harness.sh build
+DELIVERY_MODULE_REF=my-branch              ./harness.sh build   # branch
+DELIVERY_MODULE_REF=v1.4.0                 ./harness.sh build   # tag
+DELIVERY_MODULE_REF=ae967a12…78b9b321d     ./harness.sh build   # commit (full sha)
+DELIVERY_MODULE_REV=ae967a12…78b9b321d     ./harness.sh build   # commit, explicitly
+DELIVERY_MODULE_FLAKE=git+https://…/my-fork ./harness.sh build  # another repo
+
+# Pin one dependency away from what the module chose, leaving the rest derived
+DELIVERY_REF=poc-discovery-plugin-9        ./harness.sh build
+LIBP2P_MODULE_REV=ec7b8f58…239661805d      ./harness.sh build
 ```
 
-`HARNESS_MODULE_REF` takes a branch, a tag, **or** a full 40-character sha — a
-sha is recognised and passed as a `rev`, because nix does not accept one as a
-`ref`. Short shas are not: give the full object name, or use a tag.
+`_REF` takes a branch, a tag, **or** a full 40-character sha — a sha is
+recognised and passed as a `rev`, because nix does not accept one as a `ref`.
+Short shas are not: give the full object name, or use a tag. `_REV` says commit
+explicitly. Naming one clears the other, so a `_REF` on the command line beats a
+`rev` in the manifest.
+
+Setting a component's variables is the same thing as writing an override, so
+`harness.sh resolve` reports it as `override`. Anything left alone stays
+`module-lock` — **the module keeps driving its dependencies unless you say
+otherwise**, which is the point of the design.
+
+> A `_REF` naming a branch is not a pin: `resolved.json` records the branch, and
+> two builds a day apart can differ. `_REV` (or a sha in `_REF`) is what makes a
+> build reproducible.
 
 ### Overrides
 

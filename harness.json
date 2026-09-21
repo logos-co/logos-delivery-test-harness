@@ -8,7 +8,9 @@
   "module": {
     "_comment": [
       "Override without editing this file:",
-      "  HARNESS_MODULE_REF=<branch|tag|full-sha>  HARNESS_MODULE_REV=<full-sha>",
+      "  DELIVERY_MODULE_REF=<branch|tag|full-sha>  DELIVERY_MODULE_REV=<full-sha>",
+      "and likewise DELIVERY_*, LIBP2P_MODULE_*, OPENMETRICS_MODULE_*,",
+      "LOGOSCORE_CLI_* for the dependencies this module otherwise chooses.",
       "master does not carry the plugin-hosted discovery work, and a node built",
       "from it rejects the seed args and member config below, so the default is",
       "the branch that does."
