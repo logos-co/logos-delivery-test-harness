@@ -72,6 +72,22 @@ Setting a component's variables is the same thing as writing an override, so
 `module-lock` — **the module keeps driving its dependencies unless you say
 otherwise**, which is the point of the design.
 
+#### `DELIVERY_*` moves the whole fleet, not just the seed
+
+logos-delivery is built twice over: once directly, as the `logosdeliverynode`
+binary the seed runs, and once *inside* the module's build, where
+`delivery_module` — what the members run — is compiled against the module's
+`logos-delivery` input. Two separate nix invocations.
+
+So a chosen delivery is also passed to the module's build as
+`--override-input logos-delivery …`, and seed and members move together. Without
+that the fleet would quietly be built from two different deliveries, which is
+not something either `resolved.json` or a running node would show you.
+
+This is specific to delivery. The other components are runtime artefacts — a
+chosen `libp2p_module` is the one dropped into `/opt/modules` and loaded, so
+there is nothing to propagate.
+
 > A `_REF` naming a branch is not a pin: `resolved.json` records the branch, and
 > two builds a day apart can differ. `_REV` (or a sha in `_REF`) is what makes a
 > build reproducible.

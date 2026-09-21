@@ -26,7 +26,7 @@ def generate(resolved, out_path):
     comps = resolved["components"]
     lines = ["set -euo pipefail", NIX_CONF]
 
-    def build(key, link):
+    def build(key, link, extra=""):
         c = comps[key]
         ref = f"{c['flake']}#{c['output']}"
         lines.append(f'echo "--- {key}  {ref}"')
@@ -34,11 +34,28 @@ def generate(resolved, out_path):
         # nix want to update it in place, which it cannot do for a remote flake
         # and which we would not want anyway -- the rev we asked for is the rev
         # we build. master of logos-delivery-module is one such flake.
-        lines.append(f'nix build -L --no-write-lock-file "{ref}" -o {link}')
+        lines.append(f'nix build -L --no-write-lock-file {extra}"{ref}" -o {link}')
+
+    def delivery_override():
+        """Carry a chosen logos-delivery into the module's own build.
+
+        The seed is built straight from logos-delivery, but delivery_module --
+        what the members run -- is compiled inside the module's build against
+        the module's `logos-delivery` input. Two separate nix invocations, so
+        without this a chosen delivery would move the seed and leave the
+        members on whatever the module pins: a fleet built from two different
+        deliveries, silently. Nothing is passed when delivery comes from the
+        module's lock, which is the default -- then they already agree.
+        """
+        dv = comps["logos-delivery"]
+        if dv["source"] == "module-lock":
+            return ""
+        return f'--override-input logos-delivery "{dv["flake"]}" '
 
     build("logos-logoscore-cli", "/tmp/r-core")
-    for key in MODULE_COMPONENTS:
-        build(key, f"/tmp/r-{MODULE_COMPONENTS.index(key)}")
+    for i, key in enumerate(MODULE_COMPONENTS):
+        extra = delivery_override() if key == "logos-delivery-module" else ""
+        build(key, f"/tmp/r-{i}", extra)
     build("logos-delivery", "/tmp/r-seed")
 
     lines += [
