@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # logos-delivery test harness.
 #
-#   harness resolve            resolve the module's flake lock into out/resolved.json
-#   harness build [--no-image] resolve, nix-build every component, build the image
-#   harness gen                generate compose services, Prometheus targets, plan
-#   harness up                 gen, then launch each group at its startAfter offset
-#   harness down [-v]          tear the stack down
-#   harness report             discovery report over the collected traces
+#   harness.sh resolve            resolve the module's flake lock into out/resolved.json
+#   harness.sh build [--no-image] resolve, nix-build every component, build the image
+#   harness.sh gen                generate compose services, Prometheus targets, plan
+#   harness.sh up                 gen, then launch each group at its startAfter offset
+#   harness.sh down [-v]          tear the stack down
+#   harness.sh report             discovery report over the collected traces
 #
 # Host requirements: docker, bash, python3. Nix runs only inside the builder
 # container, so it is not needed here.

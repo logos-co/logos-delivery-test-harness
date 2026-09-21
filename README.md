@@ -14,13 +14,13 @@ builder container, whose store persists in the `logos-harness-nix` volume.
 ## Quickstart
 
 ```bash
-./harness build          # resolve, nix-build every component, build logos-sim:local
-./harness up             # launch the groups on their schedule
+./harness.sh build          # resolve, nix-build every component, build logos-sim:local
+./harness.sh up             # launch the groups on their schedule
 open http://localhost:3000    # Grafana (anonymous admin)
-./harness down -v
+./harness.sh down -v
 ```
 
-`HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness up` runs the
+`HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness.sh up` runs the
 37-node late-joiner topology instead of the small default.
 
 ## The manifest
@@ -51,7 +51,7 @@ exist on those branches. So the shipped manifest pins them itself:
 An override carrying a full `flake` stands alone and needs no lock entry; one
 carrying only `rev` swaps the revision of a component the module does pin.
 Point `module.ref` at a branch that pins all five and you can delete the
-overrides entirely — `harness resolve` will say so by reporting each component's
+overrides entirely — `harness.sh resolve` will say so by reporting each component's
 source as `module-lock` instead of `override`.
 
 One of them is a standing decision rather than a gap: the module's discovery
@@ -90,17 +90,17 @@ registration.
 
 | Command | Does |
 |---|---|
-| `harness resolve` | read the module's flake lock, write `out/resolved.json` |
-| `harness build [--no-image]` | resolve, nix-build every component, build the image |
-| `harness gen` | write `out/compose.groups.yml`, `out/prom-targets.json`, `out/plan.json` |
-| `harness up` | gen, start monitoring, launch each group at its offset, log to `out/run.log` |
-| `harness down [-v]` | tear down |
-| `harness report` | discovery report over the traces in `out/traces` |
+| `harness.sh resolve` | read the module's flake lock, write `out/resolved.json` |
+| `harness.sh build [--no-image]` | resolve, nix-build every component, build the image |
+| `harness.sh gen` | write `out/compose.groups.yml`, `out/prom-targets.json`, `out/plan.json` |
+| `harness.sh up` | gen, start monitoring, launch each group at its offset, log to `out/run.log` |
+| `harness.sh down [-v]` | tear down |
+| `harness.sh report` | discovery report over the traces in `out/traces` |
 
 ## Layout
 
 ```
-harness              CLI
+harness.sh           CLI
 harness.json         default manifest
 lib/                 manifest parsing, lock resolution, generators
 docker/              Dockerfile, member entrypoint

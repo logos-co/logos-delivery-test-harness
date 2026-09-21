@@ -2,7 +2,7 @@
   "_comment": [
     "Reproduces the discovery trials: a seed plus 35 members at T0, one late",
     "joiner a minute in and another five minutes in. Run with",
-    "  HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness up"
+    "  HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness.sh up"
   ],
 
   "module": {
