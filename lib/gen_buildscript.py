@@ -30,7 +30,11 @@ def generate(resolved, out_path):
         c = comps[key]
         ref = f"{c['flake']}#{c['output']}"
         lines.append(f'echo "--- {key}  {ref}"')
-        lines.append(f'nix build -L "{ref}" -o {link}')
+        # --no-write-lock-file: a flake whose own lock is not fully pinned makes
+        # nix want to update it in place, which it cannot do for a remote flake
+        # and which we would not want anyway -- the rev we asked for is the rev
+        # we build. master of logos-delivery-module is one such flake.
+        lines.append(f'nix build -L --no-write-lock-file "{ref}" -o {link}')
 
     build("logos-logoscore-cli", "/tmp/r-core")
     for key in MODULE_COMPONENTS:
