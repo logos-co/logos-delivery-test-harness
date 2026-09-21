@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#:usage
 # logos-delivery test harness.
 #
 #   harness.sh resolve            resolve the module's flake lock into out/resolved.json
@@ -10,6 +11,14 @@
 #
 # Host requirements: docker, bash, python3. Nix runs only inside the builder
 # container, so it is not needed here.
+#
+# Environment:
+#   HARNESS_MANIFEST   manifest to use          (default: ./harness.json)
+#   BUILDER_IMAGE      nix builder image        (default: nixos/nix:2.24.9)
+#   NIX_VOLUME         builder's nix store      (default: logos-harness-nix)
+#   IMAGE              runtime image to build   (default: logos-sim:local)
+#   PYTHON             interpreter              (default: python3)
+#:end
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -24,6 +33,22 @@ mkdir -p "$out/traces"
 export PYTHONPATH="$here/lib"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+
+usage() {
+  sed -n '/^#:usage$/,/^#:end$/p' "$0" | sed -e '1d;$d' -e 's/^# \{0,1\}//'
+  # The per-component prefixes are defined once, in lib/manifest.py. Print them
+  # from there rather than keeping a second copy here to drift out of step.
+  $PY - <<'PY' 2>/dev/null || true
+import manifest
+print()
+print("Revision overrides -- <PREFIX>_REF (branch, tag or full sha), _REV, _FLAKE:")
+for comp, prefix in manifest.ENV_PREFIX.items():
+    print(f"  {prefix + '_*':<22} {comp}")
+print()
+print("Anything left unset comes from the chosen logos-delivery-module's lock;")
+print("`harness.sh resolve` shows which is which.")
+PY
+}
 dc() {
   docker compose -f "$here/docker-compose.yml" -f "$out/compose.groups.yml" "$@"
 }
@@ -114,5 +139,5 @@ case "${1:-}" in
   up)      shift; cmd_up "$@" ;;
   down)    shift; cmd_down "$@" ;;
   report)  shift; cmd_report "$@" ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) usage; exit 1 ;;
 esac
