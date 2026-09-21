@@ -137,7 +137,12 @@ A group is *n nodes sharing one profile, launched at one offset*:
 - `startAfter` — seconds from T0, where T0 is when the offset-0 groups launch.
 - `jitter` — random 0..n second spread within the group. N daemons loading
   plugins at the same instant trip logos-core's 10 s plugin-load timeout.
-- `env` — extra environment for the group's containers, e.g. `LOOKUP_INTERVAL`.
+- `env` — extra environment for the group's containers. The rest of a member's
+  settings are derived (`SEED_ADDR`, `CLUSTER_ID`, `NUM_SHARDS`, ports), but
+  these are only reachable here: `LOOKUP_INTERVAL` (seconds, into the rendered
+  profile), `MESH_CONTENT_TOPIC` (what the member subscribes to, default
+  `/sim/1/mesh/proto`), `P2P_MAX_CONNS` (the plugin host's connection limits,
+  default 100), `LD_DISCO_TRACE` (where the plugin writes its trace).
 
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
@@ -158,6 +163,38 @@ registration.
 | `harness.sh up` | gen, start monitoring, launch each group at its offset, log to `out/run.log` |
 | `harness.sh down [-v]` | tear down |
 | `harness.sh report` | discovery report over the traces in `out/traces` |
+
+`harness.sh` with no command prints all of this, including the revision
+prefixes, which it reads from `lib/manifest.py` so the help cannot drift.
+
+### Everything overridable
+
+Revisions, covered [above](#choosing-revisions-from-the-environment):
+
+| Variable | Overrides |
+|---|---|
+| `DELIVERY_MODULE_REF` / `_REV` / `_FLAKE` | logos-delivery-module — the pin everything else follows |
+| `DELIVERY_REF` / `_REV` / `_FLAKE` | logos-delivery — **seed and members both** |
+| `LIBP2P_MODULE_REF` / `_REV` / `_FLAKE` | libp2p_module |
+| `OPENMETRICS_MODULE_REF` / `_REV` / `_FLAKE` | openmetrics-module |
+| `LOGOSCORE_CLI_REF` / `_REV` / `_FLAKE` | logos-logoscore-cli |
+
+How the harness itself runs:
+
+| Variable | Default | Overrides |
+|---|---|---|
+| `HARNESS_MANIFEST` | `./harness.json` | which manifest is read — how the examples are run |
+| `BUILDER_IMAGE` | `nixos/nix:2.24.9` | the container every nix command runs in |
+| `NIX_VOLUME` | `logos-harness-nix` | the docker volume holding the builder's nix store |
+| `IMAGE` | `logos-sim:local` | the runtime image `build` produces and compose runs |
+| `PYTHON` | `python3` | the interpreter for `lib/` |
+| `SUBNET` | `10.0.0.0/8` | the compose network, read by `docker-compose.yml` |
+| `PROMETHEUS_PORT` | `9090` | published Prometheus port |
+| `GRAFANA_PORT` | `3000` | published Grafana port |
+
+`NIX_VOLUME` is worth knowing about: it is where every build is cached, so two
+checkouts sharing it rebuild almost nothing, and `docker volume rm` on it is
+how you force a cold build.
 
 ## Layout
 
