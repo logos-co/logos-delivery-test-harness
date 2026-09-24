@@ -7,7 +7,12 @@
 #   harness.sh gen                generate compose services, Prometheus targets, plan
 #   harness.sh up                 gen, then launch each group at its startAfter offset
 #   harness.sh down [-v]          tear the stack down
-#   harness.sh report             discovery report over the collected traces
+#   harness.sh report [dir] [n]   discovery report over a trace dir (default out/traces),
+#                                 n = nodes expected in the DHT (default: from the plan)
+#   harness.sh collect [dir]      snapshot a running stack into dir (default
+#                                 out/collect/<utc-stamp>): stages, states, traces,
+#                                 metrics, report, and the seed's and any troubled
+#                                 member's log (COLLECT_LOGS=all keeps every log)
 #
 # Host requirements: docker, bash, python3. Nix runs only inside the builder
 # container, so it is not needed here.
@@ -133,7 +138,42 @@ for g in sorted(plan, key=lambda g: g['startAfter']):
 
 cmd_down() { cmd_gen >/dev/null; dc down "$@"; }
 
-cmd_report() { $PY "$here/lib/disco_report.py" "$out/traces" "$@"; }
+cmd_report() {
+  # Every node the plan launches, the seed included, should end up in the DHT.
+  local dir=${1:-$out/traces} n
+  n=${2:-$($PY -c "import json;print(sum(len(g['services']) for g in json.load(open('$out/plan.json'))))")}
+  $PY "$here/lib/disco_report.py" "$dir" "$n"
+}
+
+cmd_collect() {
+  local dir=${1:-$out/collect/$(date -u +%Y%m%dT%H%M%SZ)} keep s
+  mkdir -p "$dir"
+  cmd_gen >/dev/null
+  dc ps -a --format '{{.Service}}\t{{.State}}\t{{.Status}}' > "$dir/ps.txt"
+  dc logs --no-color 2>/dev/null | sed -n 's/.*\[harness /[harness /p' > "$dir/stages.txt"
+  cp "$out"/traces/*.trace "$dir/" 2>/dev/null || true
+  cp "$out/run.log" "$out/plan.json" "$out/resolved.json" "$dir/" 2>/dev/null || true
+  "$here/promq.sh" up > "$dir/q_up.json" 2>&1 || true
+  "$here/promq.sh" logos_delivery_connected_peers_per_shard > "$dir/q_peers.json" 2>&1 || true
+
+  # A container log is a few MB, so by default keep only those with something to
+  # explain: the seed, and a member whose trace carries an error, whose stage log
+  # says FAILED, REFUSED or lost, or whose container is no longer running.
+  if [ "${COLLECT_LOGS:-flagged}" = all ]; then
+    keep=$(dc ps -a --format '{{.Service}}')
+  else
+    keep=$({
+      echo seed
+      grep -lE 'ERR|UNAVAILABLE|timeout|FAILED' "$out"/traces/*.trace 2>/dev/null |
+        sed 's|.*/||; s|\.trace$||'
+      sed -nE 's/^\[harness ([^]]+)\] .*(FAILED|REFUSED|module lost).*/\1/p' "$dir/stages.txt"
+      awk -F'\t' '$2 != "running" && $1 ~ /^m[0-9]+$/ {print $1}' "$dir/ps.txt"
+    } | sort -u)
+  fi
+  for s in $keep; do dc logs --no-color "$s" > "$dir/$s.log" 2>&1; done
+  cmd_report "$dir" > "$dir/report.txt" 2>&1 || true
+  log "collected into $dir; logs kept:" $keep
+}
 
 case "${1:-}" in
   resolve) shift; cmd_resolve "$@" ;;
@@ -142,5 +182,6 @@ case "${1:-}" in
   up)      shift; cmd_up "$@" ;;
   down)    shift; cmd_down "$@" ;;
   report)  shift; cmd_report "$@" ;;
+  collect) shift; cmd_collect "$@" ;;
   *) usage; exit 1 ;;
 esac
