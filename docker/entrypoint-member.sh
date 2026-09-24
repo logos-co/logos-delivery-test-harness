@@ -108,4 +108,26 @@ retry "load-module openmetrics" logoscore load-module openmetrics
 retry "openmetrics start" logoscore call openmetrics start \
   "{\"port\":${METRICS_PORT},\"modules\":[{\"name\":\"delivery_module\",\"format\":\"text\"},{\"name\":\"libp2p_module\",\"format\":\"data\"}]}"
 
+# A module host can die mid-run while the daemon -- and so the container -- lives
+# on: logoscore then lists the module as not_loaded and every call into it fails,
+# which nothing else reports. Poll, and say so once per module, with the time
+# and the module hosts still running.
+watch_modules() {
+  local lost=" " m st hosts
+  while sleep "${WATCHDOG_INTERVAL:-5}"; do
+    st=$(logoscore status --json 2>/dev/null) || continue
+    # Only a whole answer counts: a reply cut short under load lists no module.
+    echo "$st" | grep -q '"daemon":{[^}]*"status":"running"' || continue
+    for m in libp2p_module delivery_module openmetrics; do
+      case "$lost" in *" $m "*) continue ;; esac
+      echo "$st" | grep -q "\"name\":\"$m\",\"status\":\"loaded\"" && continue
+      lost="$lost$m "
+      hosts=$(ps -eo args | sed -n 's/^[^ ]*logos_host[^ ]* .*--name \([^ ]*\).*/\1/p' | tr '\n' ' ')
+      log "module lost: $m at $(date -u +%H:%M:%S)" \
+        "($(echo "$st" | grep -o "\"name\":\"$m\",\"status\":\"[a-z_]*\""); hosts left: $hosts)"
+    done
+  done
+}
+watch_modules &
+
 wait $DAEMON
