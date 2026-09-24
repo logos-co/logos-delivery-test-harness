@@ -1,6 +1,6 @@
 #!/bin/bash
 # Entrypoint of a member container: one logoscore daemon hosting delivery_module
-# (and its libp2p_module dependency), the delivery node created from the profile
+# and the libp2p_module its discovery runs on, the delivery node created from the profile
 # the node's group names, started and subscribed. Discovery traces go to /traces.
 set -u
 log() { echo "[harness $(hostname)] $*"; }
@@ -61,9 +61,37 @@ retry() { # <label> <cmd...>: three attempts, replies get lost under load
   done
   log "$label FAILED: $(tr '\n' ' ' </tmp/cli.out | cut -c1-300)"; return 1
 }
+# libp2p_module is an optional dependency of delivery_module, so logoscore does
+# not load it on the module's behalf. The member profile hosts discovery on it
+# (plugin-kad-discovery), and a node configured that way refuses to start
+# without it.
+retry "load-module libp2p_module" logoscore load-module libp2p_module
 retry "load-module delivery_module" logoscore load-module delivery_module
 retry "createNode" logoscore call delivery_module createNode @/data/member.json
-retry "start" logoscore call delivery_module start
+
+# start only dispatches: the node reports how it went later, through the
+# nodeStarted event, and stops itself again if it failed. So "start OK" from the
+# call alone says nothing. Watch for the event before dispatching, so it cannot
+# fire unseen, and let its outcome decide.
+logoscore watch delivery_module --event nodeStarted --json >/tmp/started.json 2>/dev/null &
+WATCH=$!
+sleep 1
+retry "start dispatch" logoscore call delivery_module start
+n=0
+until grep -q nodeStarted /tmp/started.json 2>/dev/null; do
+  sleep 1; n=$((n + 1))
+  if [ "$n" -ge "${START_TIMEOUT:-60}" ]; then
+    log "start FAILED: no nodeStarted event within ${START_TIMEOUT:-60}s"; kill $WATCH $DAEMON; exit 1
+  fi
+done
+kill $WATCH 2>/dev/null
+event=$(grep -m1 nodeStarted /tmp/started.json)
+# {"data":{"arg0":<success>,"arg1":<message>,"arg2":<ns>},"event":"nodeStarted",...}
+if echo "$event" | grep -qE '"arg0":[[:space:]]*true'; then
+  log "start OK (${n}s)"
+else
+  log "start FAILED: $(echo "$event" | cut -c1-400)"; kill $DAEMON; exit 1
+fi
 
 # A node joins a shard's gossipsub topic only when something subscribes: the
 # startup subscription in the library runs solely for an app-supplied relay
