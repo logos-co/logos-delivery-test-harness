@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "35 members at T0, then one late joiner at T0+2min and another at T0+12min.",
+    "The late groups exist to time discovery for a node that arrives into an",
+    "already-formed cluster: the 12min one also lands after the seed's first",
+    "advert refresh (600s), so it reads a re-registered ad, not the original.",
+    "Run with: HARNESS_MANIFEST=examples/37-node-late-2-12min.json ./harness.sh up"
+  ],
+  "module": {
+    "flake": "git+https://github.com/logos-co/logos-delivery-module",
+    "ref": "poc-apply-discovery-plugin-with-dep"
+  },
+  "overrides": {
+    "logos-logoscore-cli": {
+      "flake": "github:logos-co/logos-logoscore-cli",
+      "rev": "665ac28bc77f45e3c610f40fef975a12609de531"
+    }
+  },
+  "network": {
+    "subnet": "10.0.0.0/8",
+    "clusterId": 42,
+    "shardsInNetwork": 1
+  },
+  "groups": [
+    {
+      "name": "seed",
+      "kind": "seed",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.0.0.10",
+      "port": 44001,
+      "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
+      "peerId": "16Uiu2HAm4gVVMqAzg2gT5cBii3qfaXykUJoB7jyHgAu71RuiELmz",
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-server=true",
+        "--metrics-server-address=0.0.0.0",
+        "--metrics-server-port=8008",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG"
+      ]
+    },
+    {
+      "name": "members",
+      "kind": "member",
+      "count": 35,
+      "startAfter": 0,
+      "jitter": 8,
+      "config": "member.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    },
+    {
+      "name": "late-2min",
+      "kind": "member",
+      "count": 1,
+      "startAfter": 120,
+      "jitter": 0,
+      "config": "member.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    },
+    {
+      "name": "late-12min",
+      "kind": "member",
+      "count": 1,
+      "startAfter": 720,
+      "jitter": 0,
+      "config": "member.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    }
+  ]
+}
