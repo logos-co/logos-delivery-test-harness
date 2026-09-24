@@ -91,6 +91,9 @@ cmd_gen() {
 
 cmd_up() {
   cmd_gen
+  # Traces are a bind mount and the members append to them, so a leftover file
+  # would carry the previous run's lookups into this run's report.
+  rm -f "$out"/traces/*.trace
   : > "$out/run.log"
   runlog() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$out/run.log"; }
 
