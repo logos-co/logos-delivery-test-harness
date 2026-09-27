@@ -122,6 +122,20 @@ def resolve(m, lock_path, out_path):
             "source": "override" if ov else "module-lock",
         }
 
+    if manifest.uses_demo(m):
+        # Not an input of the module: its own source, main unless overridden.
+        # build records the commit a branch resolved to (out/demo-paths.json).
+        ov = overrides.get(manifest.DEMO) or {}
+        base = ov.get("flake", manifest.DEMO_FLAKE)
+        rev, ref = ov.get("rev"), ov.get("ref")
+        if not (rev or ref or _already_pinned(base)):
+            ref = manifest.DEMO_DEFAULT_REF
+        resolved[manifest.DEMO] = {
+            "flake": _compose(base, rev, ref),
+            "output": manifest.DEMO_OUTPUT,
+            "source": "override" if ov else "default",
+        }
+
     if missing:
         print(
             "harness: the chosen module ref does not pin: " + ", ".join(missing),

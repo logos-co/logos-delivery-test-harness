@@ -1,0 +1,10 @@
+# Image for delivery-demo nodes: the member image plus a virtual display you can
+# watch in a browser (Xvfb -> x11vnc -> noVNC). The demo app itself is not in
+# here: it runs from the nix volume, mounted read-only at /nix.
+ARG BASE=logos-sim:local
+FROM ${BASE}
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends xvfb x11vnc novnc python3-websockify procps && \
+    rm -rf /var/lib/apt/lists/*
+COPY docker/entrypoint-demo.sh /opt/sim/entrypoint-demo.sh
+COPY docker/inspector.py /opt/sim/inspector.py

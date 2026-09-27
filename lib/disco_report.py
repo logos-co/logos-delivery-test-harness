@@ -70,7 +70,7 @@ def pct(xs, p):
     xs = sorted(xs)
     return xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))] if xs else float("nan")
 
-print(f"traced nodes (delivery-module): {members}  expected ids in the DHT: {expected}  distinct ids seen anywhere: {len(all_ids)}")
+print(f"traced nodes (delivery-module, delivery-demo): {members}  expected ids in the DHT: {expected}  distinct ids seen anywhere: {len(all_ids)}")
 print("  (logosdeliverynode nodes write no trace: they count in the expected set, not in the rows below)")
 print(f"backend ready: {ok_backend}/{members}   advertised /logos/delivery: {ok_advert}/{members}   plugin errors: {sum(r['errors'] for r in rows)}")
 print(f"members whose lookups found peers: {len(with_hit)}/{members}")

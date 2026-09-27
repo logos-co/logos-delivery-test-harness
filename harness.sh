@@ -82,6 +82,9 @@ cmd_build() {
     -v "$NIX_VOLUME:/nix" \
     -v "$out:/out" \
     "$BUILDER_IMAGE" sh -euc 'sh /out/build-inside.sh'
+  local demo
+  demo=$($PY -c "import json;print('logos-delivery-demo' in json.load(open('$out/resolved.json'))['components'])")
+  [ "$demo" = True ] && $PY "$here/lib/demo_paths.py" "$out"
 
   if [ "${1:-}" = "--no-image" ]; then
     log "skipping the image build"
@@ -89,6 +92,11 @@ cmd_build() {
   fi
   log "docker build $IMAGE"
   docker build -t "$IMAGE" -f "$here/docker/Dockerfile" "$here"
+  if [ "$demo" = True ]; then
+    log "docker build logos-sim-demo:local"
+    docker build -t logos-sim-demo:local --build-arg BASE="$IMAGE" \
+      -f "$here/docker/Dockerfile.demo" "$here"
+  fi
 }
 
 cmd_gen() {
@@ -118,6 +126,12 @@ import json;print(json.load(open('$out/resolved.json'))['module'])")"
 import json
 plan=json.load(open('$out/plan.json'))
 print(' '.join(s for g in plan if g['startAfter']==0 for s in g['services']))")
+  $PY -c "
+import json
+for g in json.load(open('$out/plan.json')):
+    for n, p in g.get('vnc', {}).items():
+        print(f'{n}: http://localhost:{p}/vnc.html  ({g[\"name\"]}, from T0+{g[\"startAfter\"]}s)')" |
+    while read -r line; do runlog "noVNC $line"; done
   runlog "T0 -- launching: $zero"
   t0=$(date +%s)
   echo "$t0" > "$out/t0"
@@ -208,8 +222,9 @@ cmd_collect() {
     > "$dir/q_relay.json" 2>&1 || true
 
   # A container log is a few MB, so by default keep only those with something to
-  # explain: every bootstrap and every logosdeliverynode (no trace to judge them
-  # by), and a module member whose trace carries an error, whose stage log
+  # explain: every bootstrap, every logosdeliverynode (no trace to judge them
+  # by), every delivery-demo (the app's own log), and a module member whose
+  # trace carries an error, whose stage log
   # says FAILED, REFUSED or lost, or whose container is no longer running.
   if [ "${COLLECT_LOGS:-flagged}" = all ]; then
     keep=$(dc ps -a --format '{{.Service}}')
@@ -217,7 +232,7 @@ cmd_collect() {
     keep=$({
       $PY -c "
 import json
-print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['role']=='bootstrap' or g['kind']=='logosdeliverynode' for s in g['services']))"
+print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['role']=='bootstrap' or g['kind'] in ('logosdeliverynode','delivery-demo') for s in g['services']))"
       grep -lE 'ERR|UNAVAILABLE|timeout|FAILED' "$out"/traces/*.trace 2>/dev/null |
         sed 's|.*/||; s|\.trace$||'
       sed -nE 's/^\[harness ([^]]+)\] .*(FAILED|REFUSED|module lost).*/\1/p' "$dir/stages.txt"
@@ -225,6 +240,13 @@ print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['role']=='boo
     } | sort -u)
   fi
   for s in $keep; do dc logs --no-color "$s" > "$dir/$s.log" 2>&1; done
+  # What each running demo shows, through its inspector (never published).
+  for s in $($PY -c "
+import json
+print(' '.join(s for g in json.load(open('$out/plan.json')) if g['kind']=='delivery-demo' for s in g['services']))"); do
+    dc exec -T "$s" python3 /opt/sim/inspector.py screenshot /tmp/screen.png >/dev/null 2>&1 &&
+      dc cp "$s:/tmp/screen.png" "$dir/$s.png" >/dev/null 2>&1
+  done
   cmd_report "$dir" > "$dir/report.txt" 2>&1 || true
   log "collected into $dir; logs kept:" $keep
 }

@@ -29,6 +29,7 @@ ENV_PREFIX = {
     "libp2p_module": "LIBP2P_MODULE",
     "openmetrics-module": "OPENMETRICS_MODULE",
     "logos-logoscore-cli": "LOGOSCORE_CLI",
+    "logos-delivery-demo": "DELIVERY_DEMO",
 }
 
 INFRA_HOSTS = 256  # first addresses of the subnet: bootstraps, prometheus, grafana
@@ -47,7 +48,8 @@ _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 ROLES = ("bootstrap", "member")
 NATIVE = "logosdeliverynode"  # the delivery node binary, in-process kademlia
 MODULE_NODE = "delivery-module"  # logoscore + delivery_module + libp2p_module
-KINDS = (NATIVE, MODULE_NODE)
+DEMO_NODE = "delivery-demo"  # the logos-delivery-demo UI, viewable over noVNC
+KINDS = (NATIVE, MODULE_NODE, DEMO_NODE)
 DEFAULT_KIND = {"bootstrap": NATIVE, "member": MODULE_NODE}
 
 # Ports inside every container. A native node listens on its tcp port and is
@@ -58,6 +60,14 @@ NATIVE_METRICS_PORT = 8008
 MODULE_TCP_PORT = 44000
 MODULE_P2P_PORT = 45000
 MODULE_METRICS_PORT = 9100
+DEMO_VNC_PORT = 6080  # noVNC inside a demo container; published as 6080 + n
+
+# The demo is not an input of the module, so it has a source of its own. It is
+# built only for a manifest that runs one, against the fleet's delivery_module.
+DEMO = "logos-delivery-demo"
+DEMO_FLAKE = "github:logos-co/logos-delivery-demo"
+DEMO_DEFAULT_REF = "main"
+DEMO_OUTPUT = "ui-dev"
 
 # Flags the harness sets on every native node itself; a group's args would
 # only fight them.
@@ -260,6 +270,8 @@ def _check_group(g, names):
     # Absent: they run on.
     if "stopAfter" in g and g["stopAfter"] <= g["startAfter"]:
         _fail(f"group '{g['name']}': stopAfter must come after startAfter")
+    if g["kind"] == DEMO_NODE and g["role"] != "member":
+        _fail(f"group '{g['name']}': a {DEMO_NODE} node can only be a member")
     if g["kind"] == NATIVE:
         g.setdefault("args", [])
         for a in g["args"]:
@@ -312,6 +324,10 @@ def module_flake(m):
     if mod.get("rev"):
         return f"{mod['flake']}{sep}rev={mod['rev']}"
     return f"{mod['flake']}{sep}ref={mod['ref']}"
+
+
+def uses_demo(m):
+    return any(g["kind"] == DEMO_NODE for g in m["groups"])
 
 
 def bootstrap_addr(g):

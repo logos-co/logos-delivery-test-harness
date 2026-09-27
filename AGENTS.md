@@ -38,6 +38,7 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 | "N bootstraps" (also "seeds", "bootstrap nodes") | N groups of `"role": "bootstrap", "count": 1`, each with its own `ip` (`10.0.0.10`, `10.0.0.20`, `10.0.0.21`, … — never `.11`/`.12`) and its own 64-hex `nodekey`. Leave `peerId` and `port` out: derived / defaulted. Bootstraps 2..N join the first one's DHT automatically. |
 | "native", "logosdeliverynode", "standalone node" | `"kind": "logosdeliverynode"` plus `args` — copy the first bootstrap's `args` from `harness.json` |
 | "module node", "delivery-module", "logoscore node" | `"kind": "delivery-module"` (optionally `config`, `env`) |
+| "demo", "demo UI", "an instance I can watch", "logos-delivery-demo" | `"role": "member", "kind": "delivery-demo"` (same fields as a module member). Needs a `build` with that manifest. Tell the operator the noVNC URLs `gen` prints (`http://localhost:608N/vnc.html`). |
 | (kind not said) | leave `kind` out: bootstraps default to `logosdeliverynode`, members to `delivery-module` |
 | "M startup members / joiners" | one member group, `"role": "member", "count": M, "startAfter": 0, "jitter": 8` — "M mixed" means two groups, one per kind, splitting M |
 | "after X min add a member" | its own member group, `"count": 1, "startAfter": X*60, "jitter": 0` |
@@ -74,6 +75,7 @@ per component with `<PREFIX>_REF` (branch, tag or **full** 40-char sha) or
 | libp2p_module | `LIBP2P_MODULE` | |
 | openmetrics-module | `OPENMETRICS_MODULE` | |
 | logos-logoscore-cli | `LOGOSCORE_CLI` | |
+| logos-delivery-demo | `DELIVERY_DEMO` | only for `delivery-demo` groups; default `main`, always built against the fleet's delivery_module |
 
 For a PR, use its head commit, not its branch name:
 `gh pr view <n> --repo <owner/repo> --json headRefOid`. Pass the same variables
@@ -129,6 +131,7 @@ For a mid-run look without disturbing anything: `./harness.sh collect <dir>`
 | `report.txt` | discovery summary over the delivery-module nodes' traces (a logosdeliverynode writes none; judge those from Prometheus and their logs): members ready/advertised, first-lookup latency, empty lookups, records per lookup, coverage of the expected id set, per-member table |
 | `m*.trace` | every call across the discovery plugin boundary, with timestamps |
 | `ps.txt` | container states at collection; stopped-by-schedule groups show `exited` |
+| `mN.png` | a screenshot of each running delivery-demo, taken through its QML inspector at collection |
 | `q_up.json`, `q_peers.json`, `q_relay.json` | Prometheus at collection: `up`; `logos_delivery_connected_peers_per_shard` (delivery-module nodes only); relay connections per node, in + out, for both kinds |
 | `<bootstrap>.log`, `m*.log` | kept for every bootstrap, every logosdeliverynode, and any delivery-module member with an error, a failed stage or a stopped container |
 | `resolved.json` | the exact revision of every component — quote it in the report |
@@ -177,6 +180,10 @@ Lead with the verdict in one sentence, then:
   protocol) first appear about **5 minutes** after a node starts, each node on
   its own timer. A run shorter than that collects empty `q_peers.json` /
   `q_relay.json`; judge connectivity from the traces and logs instead.
+- A delivery-demo node has no Prometheus target and no `module lost` watchdog;
+  judge it by its stage lines, trace and log. Its first build adds ~3.4 GB to
+  the nix volume (the Qt closure) — check free space first
+  (`docker run --rm alpine df -h /`).
 - Registrars keep an advert until it expires (900 s by default), so a stopped
   node's id can keep coming back from lookups for up to that long after the
   stop. That is expected, not a leak.
