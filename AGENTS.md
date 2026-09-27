@@ -24,6 +24,9 @@ This file is the procedure and the things that are easy to get wrong.
 - **Scratch manifests go in `out/manifests/`** (gitignored). Only add to
   `examples/` when asked for a reusable topology.
 - **Do not edit `out/`** by hand except `out/manifests/`; it is regenerated.
+- **Do not edit `harness.sh` while a `build`, `up` or `run` is executing it.**
+  bash reads a script as it goes: the running command finishes, then fails on
+  whatever the edit left at its old read position.
 - **Do not push, open PRs or change the default pins** unless the operator asks.
 - `docker/entrypoint-member.sh` and `conf/` are baked into the image: after
   changing them, `./harness.sh build` (fast when only the image changes).
@@ -35,7 +38,7 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 
 | The request says | In the manifest |
 |---|---|
-| "N bootstraps" (also "seeds", "bootstrap nodes") | N groups of `"role": "bootstrap", "count": 1`, each with its own `ip` (`10.0.0.10`, `10.0.0.20`, `10.0.0.21`, … — never `.11`/`.12`) and its own 64-hex `nodekey`. Leave `peerId` and `port` out: derived / defaulted. Bootstraps 2..N join the first one's DHT automatically. |
+| "N bootstraps", "bootstrap nodes" (a request may still say "seeds": same thing) | N groups of `"role": "bootstrap", "count": 1`, each with its own `ip` (`10.0.0.10`, `10.0.0.20`, `10.0.0.21`, … — never `.11`/`.12`) and its own 64-hex `nodekey`. Leave `peerId` and `port` out: derived / defaulted. Bootstraps 2..N join the first one's DHT automatically. |
 | "native", "logosdeliverynode", "standalone node" | `"kind": "logosdeliverynode"` plus `args` — copy the first bootstrap's `args` from `harness.json` |
 | "module node", "delivery-module", "logoscore node" | `"kind": "delivery-module"` (optionally `config`, `env`) |
 | "demo", "demo UI", "an instance I can watch", "logos-delivery-demo" | `"role": "member", "kind": "delivery-demo"` (same fields as a module member). Needs a `build` with that manifest. Tell the operator the noVNC URLs `gen` prints (`http://localhost:608N/vnc.html`). |
@@ -117,6 +120,11 @@ Timing, precisely:
 - `up` alone runs the same schedule, returns when the last event has happened,
   and leaves the stack running (for Grafana at `http://localhost:3000`). Always
   finish with `./harness.sh collect` and `./harness.sh down -v`.
+
+**An experiment the operator drives** ("let me attach it myself", "I want to
+watch it"): use `up`, not `run`, and leave the stack running. Report what is up,
+the noVNC URLs `gen` printed, and the exact `./harness.sh start` / `stop`
+commands; do not collect or tear down until asked.
 
 To change the fleet by hand mid-run -- attach a `manual` group, add or take down
 any group or node -- use `./harness.sh start <group|node>` / `stop`: they act on

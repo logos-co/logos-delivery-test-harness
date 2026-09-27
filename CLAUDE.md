@@ -6,6 +6,8 @@
   limit. Start them with `run_in_background` and wait for the completion
   notification; do not chain `sleep`s to poll. To wait on a condition inside a
   run (e.g. "all members report start"), use one bounded until-loop.
+- `up` returns once its schedule is done: for a fleet whose only later groups
+  are `manual`, that is seconds, so run it in the foreground.
 - Send build output to a file (`> out/build.log 2>&1`) and read the tail, not
   the whole log.
 - Traces, stage logs and container logs are large: filter them (`grep`, `awk`)

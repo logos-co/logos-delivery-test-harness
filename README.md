@@ -255,6 +255,22 @@ members.
   (`mN.png`). No Prometheus target (no CLI into the demo's core to start
   openmetrics with) and no `module lost` watchdog.
 
+#### Watch one live
+
+A fleet with a `manual` demo you attach by hand
+([`examples/demo-manual.json`](examples/demo-manual.json)):
+
+```bash
+export HARNESS_MANIFEST=examples/demo-manual.json   # 1 bootstrap, 3 members, 1 manual demo
+./harness.sh build                                  # first time only; cached after
+./harness.sh up                                     # fleet up, the demo left off
+./harness.sh start demo                             # attach it; prints its noVNC URL
+open http://localhost:6080/vnc.html                 # Connect: the demo UI, live
+tail -f out/traces/m4.trace                         # its discovery lookups as they happen
+./harness.sh stop demo                              # detach; start again whenever
+./harness.sh down -v                                # tear everything down
+```
+
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
 
@@ -400,14 +416,16 @@ HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh build
 HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh run 600 out/collect/demo
 ```
 
-**"Bring up the fleet, and let me attach a demo by hand when I want."** —
-[`examples/demo-manual.json`](examples/demo-manual.json) has a `manual` demo group:
+**"Set up a small experiment I can drive myself: one native bootstrap, three
+module members and two demo UIs that I attach by hand. Build it and bring the
+fleet up, but leave the demos off, and tell me how to start them."** — the agent
+writes a manifest like [`examples/demo-manual.json`](examples/demo-manual.json)
+with `"count": 2` on the manual demo group into `out/manifests/`, builds, runs
+`up`, and hands back the two commands and URLs:
 
 ```bash
-HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh build
-HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh up
-./harness.sh start demo      # attach; the noVNC URL is printed
-./harness.sh stop demo       # detach; start it again whenever
+./harness.sh start demo      # both demos; noVNC on http://localhost:6080 and :6081
+./harness.sh stop m5         # or one node at a time, by name
 ```
 
 **"Did anyone lose libp2p?"** — after a run, `grep 'module lost' <dir>/stages.txt`;
