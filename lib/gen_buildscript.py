@@ -7,6 +7,8 @@ already substituted. Everything the container does is `nix build`.
 import json
 import sys
 
+import manifest
+
 NIX_CONF = """mkdir -p /etc/nix
 {
   echo "experimental-features = nix-command flakes"
@@ -20,6 +22,42 @@ NIX_CONF = """mkdir -p /etc/nix
 
 # Components whose `modules/` directory is copied into the image's module dir.
 MODULE_COMPONENTS = ["libp2p_module", "openmetrics-module", "logos-delivery-module"]
+
+
+# The demo runs straight from the nix volume rather than from a copy in an image
+# (its closure is ~3.4 GB), so what it needs is rooted there and survives a GC.
+GCROOTS = "/nix/var/nix/gcroots/harness"
+
+
+def demo_builds(comps, lines):
+    """logos-delivery-demo, built against the fleet's own delivery_module.
+
+    The demo pins a delivery_module release in its flake. Both overrides are
+    needed: the first swaps the module's source, but nix keeps the demo lock's
+    entry for the module's own `logos-delivery` input unless it is overridden
+    too -- a demo on the fleet's module, compiled against another delivery.
+    The standalone host loads only `-dev` module variants, so libp2p_module is
+    built again as `#install` (dev) at the fleet's rev; the portable build the
+    members use is refused.
+    """
+    demo, mod = comps[manifest.DEMO], comps[manifest.MODULE]
+    dv, lp = comps["logos-delivery"], comps["libp2p_module"]
+    ref = f"{demo['flake']}#{demo['output']}"
+    lines += [
+        f"mkdir -p {GCROOTS}",
+        f'echo "--- {manifest.DEMO}  {ref}"',
+        f"nix build -L --no-write-lock-file "
+        f'--override-input delivery_module "{mod["flake"]}" '
+        f'--override-input delivery_module/logos-delivery "{dv["flake"]}" '
+        f'"{ref}" -o {GCROOTS}/demo',
+        f'echo "--- libp2p_module (dev variant, for the demo host)  {lp["flake"]}#install"',
+        f'nix build -L --no-write-lock-file "{lp["flake"]}#install" -o {GCROOTS}/libp2p-dev',
+        f'nix flake metadata --json --no-write-lock-file "{demo["flake"]}" > /out/demo-meta.json',
+        # A copy out of the store is read-only; the next build must replace it.
+        "rm -f /out/demo-wrapper.sh",
+        f"cp {GCROOTS}/demo/bin/run-logos-standalone-ui /out/demo-wrapper.sh",
+        f"readlink -f {GCROOTS}/libp2p-dev > /out/demo-libp2p-path",
+    ]
 
 
 def generate(resolved, out_path):
@@ -57,6 +95,8 @@ def generate(resolved, out_path):
         extra = delivery_override() if key == "logos-delivery-module" else ""
         build(key, f"/tmp/r-{i}", extra)
     build("logos-delivery", "/tmp/r-seed")
+    if manifest.DEMO in comps:
+        demo_builds(comps, lines)
 
     lines += [
         'echo "--- collecting into /out"',

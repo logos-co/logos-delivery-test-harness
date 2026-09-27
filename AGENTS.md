@@ -24,6 +24,9 @@ This file is the procedure and the things that are easy to get wrong.
 - **Scratch manifests go in `out/manifests/`** (gitignored). Only add to
   `examples/` when asked for a reusable topology.
 - **Do not edit `out/`** by hand except `out/manifests/`; it is regenerated.
+- **Do not edit `harness.sh` while a `build`, `up` or `run` is executing it.**
+  bash reads a script as it goes: the running command finishes, then fails on
+  whatever the edit left at its old read position.
 - **Do not push, open PRs or change the default pins** unless the operator asks.
 - `docker/entrypoint-member.sh` and `conf/` are baked into the image: after
   changing them, `./harness.sh build` (fast when only the image changes).
@@ -35,13 +38,15 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 
 | The request says | In the manifest |
 |---|---|
-| "N bootstraps" (also "seeds", "bootstrap nodes") | N groups of `"role": "bootstrap", "count": 1`, each with its own `ip` (`10.0.0.10`, `10.0.0.20`, `10.0.0.21`, … — never `.11`/`.12`) and its own 64-hex `nodekey`. Leave `peerId` and `port` out: derived / defaulted. Bootstraps 2..N join the first one's DHT automatically. |
+| "N bootstraps", "bootstrap nodes" (a request may still say "seeds": same thing) | N groups of `"role": "bootstrap", "count": 1`, each with its own `ip` (`10.0.0.10`, `10.0.0.20`, `10.0.0.21`, … — never `.11`/`.12`) and its own 64-hex `nodekey`. Leave `peerId` and `port` out: derived / defaulted. Bootstraps 2..N join the first one's DHT automatically. |
 | "native", "logosdeliverynode", "standalone node" | `"kind": "logosdeliverynode"` plus `args` — copy the first bootstrap's `args` from `harness.json` |
 | "module node", "delivery-module", "logoscore node" | `"kind": "delivery-module"` (optionally `config`, `env`) |
+| "demo", "demo UI", "an instance I can watch", "logos-delivery-demo" | `"role": "member", "kind": "delivery-demo"` (same fields as a module member). Needs a `build` with that manifest. Tell the operator the noVNC URLs `gen` prints (`http://localhost:608N/vnc.html`). |
 | (kind not said) | leave `kind` out: bootstraps default to `logosdeliverynode`, members to `delivery-module` |
 | "M startup members / joiners" | one member group, `"role": "member", "count": M, "startAfter": 0, "jitter": 8` — "M mixed" means two groups, one per kind, splitting M |
 | "after X min add a member" | its own member group, `"count": 1, "startAfter": X*60, "jitter": 0` |
 | "K peers leave / close / stop at Y min" | those peers in their own group with `"stopAfter": Y*60` — stops apply to whole groups |
+| "attach X by hand", "I'll add it myself", "not on the schedule" | `"manual": true` on that group (no `startAfter`/`stopAfter`); after `up`, `./harness.sh start <group\|node>` attaches it and `stop` detaches it |
 | "stop a bootstrap at Y min" | `"stopAfter": Y*60` on that bootstrap's group |
 | "members only on bootstrap2" | `"bootstraps": ["bootstrap2"]` on the member group (default: all bootstraps, round-robin) |
 | "a Z min test" | `./harness.sh run <Z*60>` — not a manifest field |
@@ -74,6 +79,7 @@ per component with `<PREFIX>_REF` (branch, tag or **full** 40-char sha) or
 | libp2p_module | `LIBP2P_MODULE` | |
 | openmetrics-module | `OPENMETRICS_MODULE` | |
 | logos-logoscore-cli | `LOGOSCORE_CLI` | |
+| logos-delivery-demo | `DELIVERY_DEMO` | only for `delivery-demo` groups; default `main`, always built against the fleet's delivery_module |
 
 For a PR, use its head commit, not its branch name:
 `gh pr view <n> --repo <owner/repo> --json headRefOid`. Pass the same variables
@@ -115,6 +121,16 @@ Timing, precisely:
   and leaves the stack running (for Grafana at `http://localhost:3000`). Always
   finish with `./harness.sh collect` and `./harness.sh down -v`.
 
+**An experiment the operator drives** ("let me attach it myself", "I want to
+watch it"): use `up`, not `run`, and leave the stack running. Report what is up,
+the noVNC URLs `gen` printed, and the exact `./harness.sh start` / `stop`
+commands; do not collect or tear down until asked.
+
+To change the fleet by hand mid-run -- attach a `manual` group, add or take down
+any group or node -- use `./harness.sh start <group|node>` / `stop`: they act on
+the running stack, refuse to start a member whose bootstrap is down, and log to
+`run.log` with the offset from T0.
+
 For a mid-run look without disturbing anything: `./harness.sh collect <dir>`
 (the stack keeps running), `./promq.sh '<promql>'`, or the stage lines:
 `docker compose -f docker-compose.yml -f out/compose.groups.yml logs --no-color | grep '\[harness'`.
@@ -129,6 +145,7 @@ For a mid-run look without disturbing anything: `./harness.sh collect <dir>`
 | `report.txt` | discovery summary over the delivery-module nodes' traces (a logosdeliverynode writes none; judge those from Prometheus and their logs): members ready/advertised, first-lookup latency, empty lookups, records per lookup, coverage of the expected id set, per-member table |
 | `m*.trace` | every call across the discovery plugin boundary, with timestamps |
 | `ps.txt` | container states at collection; stopped-by-schedule groups show `exited` |
+| `mN.png` | a screenshot of each running delivery-demo, taken through its QML inspector at collection |
 | `q_up.json`, `q_peers.json`, `q_relay.json` | Prometheus at collection: `up`; `logos_delivery_connected_peers_per_shard` (delivery-module nodes only); relay connections per node, in + out, for both kinds |
 | `<bootstrap>.log`, `m*.log` | kept for every bootstrap, every logosdeliverynode, and any delivery-module member with an error, a failed stage or a stopped container |
 | `resolved.json` | the exact revision of every component — quote it in the report |
@@ -177,6 +194,10 @@ Lead with the verdict in one sentence, then:
   protocol) first appear about **5 minutes** after a node starts, each node on
   its own timer. A run shorter than that collects empty `q_peers.json` /
   `q_relay.json`; judge connectivity from the traces and logs instead.
+- A delivery-demo node has no Prometheus target and no `module lost` watchdog;
+  judge it by its stage lines, trace and log. Its first build adds ~3.4 GB to
+  the nix volume (the Qt closure) — check free space first
+  (`docker run --rm alpine df -h /`).
 - Registrars keep an advert until it expires (900 s by default), so a stopped
   node's id can keep coming back from lookups for up to that long after the
   stop. That is expected, not a leak.

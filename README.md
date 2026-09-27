@@ -56,6 +56,7 @@ Every component takes `<PREFIX>_REF`, `<PREFIX>_REV` and `<PREFIX>_FLAKE`:
 | libp2p_module | `LIBP2P_MODULE` |
 | openmetrics-module | `OPENMETRICS_MODULE` |
 | logos-logoscore-cli | `LOGOSCORE_CLI` |
+| logos-delivery-demo (only for `delivery-demo` groups; default `main`, not from the module's lock) | `DELIVERY_DEMO` |
 
 ```bash
 DELIVERY_MODULE_REF=my-branch              ./harness.sh build   # branch
@@ -150,6 +151,7 @@ one offset and optionally stopped at another*:
   |---|---|---|
   | `logosdeliverynode` | the delivery node binary, kademlia in-process; configured by the group's `args` | `bootstrap` |
   | `delivery-module` | a logoscore daemon hosting delivery_module, discovery hosted on libp2p_module; configured by the group's `config` profile | `member` |
+  | `delivery-demo` | the [logos-delivery-demo](https://github.com/logos-co/logos-delivery-demo) UI with its own delivery node, which you watch in a browser; configured by the same `config` profile ([below](#demo-nodes)) | — (members only) |
 
 - `count` — n nodes. Bootstrap groups hold exactly one (below).
 - `config` (delivery-module) — the profile in `conf/`, rendered per node
@@ -166,6 +168,11 @@ one offset and optionally stopped at another*:
   killed. Must be later than `startAfter`. Stops apply to a whole group, so
   peers meant to leave get a group of their own. A stopped container keeps its
   logs and trace for `collect`.
+- `manual` (members) — `true` keeps the group off the schedule: `gen` writes
+  its services and `build` builds what they need, but `up` and `run` never
+  launch it. Attach it to the running stack with `harness.sh start <group>`
+  (or one node, `start m4`) and detach it with `stop`, as often as you like. No
+  `startAfter` / `stopAfter` on a manual group.
 - `bootstraps` (members) — the bootstrap groups this group joins through, handed
   out round-robin across the fleet. Default: every bootstrap group. A
   delivery-module member takes one bootstrap peer, because the plugin passes
@@ -206,6 +213,64 @@ logosdeliverynode nodes write no discovery trace and no stage log, so `report`
 and the `module lost` watchdog cover delivery-module nodes only; `collect` keeps
 every logosdeliverynode's log instead, and Prometheus scrapes both kinds.
 
+### Demo nodes
+
+A `delivery-demo` group runs [logos-delivery-demo](https://github.com/logos-co/logos-delivery-demo)
+— the educational UI for delivery_module — as a fleet member you can watch and
+use in a browser:
+
+```json
+{ "name": "demo", "role": "member", "kind": "delivery-demo", "count": 2,
+  "startAfter": 0, "stopAfter": 900, "env": { "LOOKUP_INTERVAL": "15" } }
+```
+
+It takes the same fields as a delivery-module member (`count`, `startAfter`,
+`stopAfter`, `jitter`, `config`, `env`, `bootstraps`) and joins the same way:
+the profile is rendered as for a module member, and the node is created with it.
+Each instance's screen is published through noVNC on `6080 + n` —
+`http://localhost:6080/vnc.html` for the first. `gen` prints the URLs and `run`
+logs them at T0.
+
+How it works: the demo never starts a node by itself, so the harness makes the
+call its "Advanced config" row makes — `callCreateNodeWithConfig(<profile>)` —
+through the QML inspector its host (logos-standalone-app) embeds, and then
+subscribes it to `MESH_CONTENT_TOPIC`. The call shows up in the demo's event log
+as if the button had been pressed; from there the UI is yours. The stage log
+reports `start OK (Ns)` / `start FAILED: …` and `subscribe … OK`, as for module
+members.
+
+- **Same delivery as the fleet.** The demo is built against the fleet's
+  delivery_module *and* that module's logos-delivery
+  (`--override-input delivery_module`, `--override-input
+  delivery_module/logos-delivery`); the demo's own pins are not used. Choose the
+  demo's revision with `DELIVERY_DEMO_REF` / `_REV` (default `main`); the commit
+  it resolved to is in `out/demo-paths.json`.
+- **Run from the nix volume.** The demo's closure is ~3.4 GB, so it is not copied
+  into an image: demo containers mount the build volume read-only at `/nix`, and
+  the `logos-sim-demo:local` image only adds the display (~0.5 GB over the member
+  image). What the demo needs is GC-rooted in the volume. It is built only for a
+  manifest that has a `delivery-demo` group.
+- **Observability.** Traces go to `report` like a module member's; `collect`
+  keeps each demo's log (the app's output, `[app]`-prefixed) and a screenshot
+  (`mN.png`). No Prometheus target (no CLI into the demo's core to start
+  openmetrics with) and no `module lost` watchdog.
+
+#### Watch one live
+
+A fleet with a `manual` demo you attach by hand
+([`examples/demo-manual.json`](examples/demo-manual.json)):
+
+```bash
+export HARNESS_MANIFEST=examples/demo-manual.json   # 1 bootstrap, 3 members, 1 manual demo
+./harness.sh build                                  # first time only; cached after
+./harness.sh up                                     # fleet up, the demo left off
+./harness.sh start demo                             # attach it; prints its noVNC URL
+open http://localhost:6080/vnc.html                 # Connect: the demo UI, live
+tail -f out/traces/m4.trace                         # its discovery lookups as they happen
+./harness.sh stop demo                              # detach; start again whenever
+./harness.sh down -v                                # tear everything down
+```
+
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
 
@@ -225,6 +290,8 @@ registration.
 | `harness.sh up` | gen, start monitoring, launch each group at its `startAfter` and stop it at its `stopAfter`, log to `out/run.log`; returns when the schedule is done and leaves the stack up |
 | `harness.sh run <sec> [dir]` | `up`, wait until T0 + `sec`, `collect` into `dir` (default `out/collect/<utc-stamp>`), `down -v`. Launches or stops scheduled at or after the end are dropped, with a warning |
 | `harness.sh collect [dir]` | snapshot a running stack: stage log, container states, traces, plan and pins, `up`, peers-per-shard and relay-connection metrics, report, and the logs of every bootstrap and logosdeliverynode and of any delivery-module member with an error, a failed stage or a stopped container (`COLLECT_LOGS=all` keeps every log) |
+| `harness.sh start <group\|node>…` | start groups or nodes in the running stack — a `manual` group, or any other mid-run. Refuses when the bootstrap they join through is not running; logs to `run.log` and prints a demo's noVNC URL |
+| `harness.sh stop <group\|node>…` | stop them again (graceful, as for `stopAfter`); `start` brings them back |
 | `harness.sh down [-v]` | tear down |
 | `harness.sh report [dir] [n]` | discovery report over a trace dir (default `out/traces`); `n` nodes expected in the DHT, default from the plan |
 
@@ -242,6 +309,7 @@ Revisions, covered [above](#choosing-revisions-from-the-environment):
 | `LIBP2P_MODULE_REF` / `_REV` / `_FLAKE` | libp2p_module |
 | `OPENMETRICS_MODULE_REF` / `_REV` / `_FLAKE` | openmetrics-module |
 | `LOGOSCORE_CLI_REF` / `_REV` / `_FLAKE` | logos-logoscore-cli |
+| `DELIVERY_DEMO_REF` / `_REV` / `_FLAKE` | logos-delivery-demo (default `main`) |
 
 How the harness itself runs:
 
@@ -337,6 +405,27 @@ DELIVERY_REF=<full sha> HARNESS_MANIFEST=examples/37-node-late-2-12min.json \
 ```bash
 DELIVERY_MODULE_REF=<full sha> ./harness.sh build
 DELIVERY_MODULE_REF=<full sha> ./harness.sh run 600
+```
+
+**"Add two demo UIs I can watch, one joining after 2 minutes and leaving at 8."** —
+[`examples/demo-2-instances.json`](examples/demo-2-instances.json); open the
+printed `http://localhost:608N/vnc.html` URLs while it runs:
+
+```bash
+HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh build
+HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh run 600 out/collect/demo
+```
+
+**"Set up a small experiment I can drive myself: one native bootstrap, three
+module members and two demo UIs that I attach by hand. Build it and bring the
+fleet up, but leave the demos off, and tell me how to start them."** — the agent
+writes a manifest like [`examples/demo-manual.json`](examples/demo-manual.json)
+with `"count": 2` on the manual demo group into `out/manifests/`, builds, runs
+`up`, and hands back the two commands and URLs:
+
+```bash
+./harness.sh start demo      # both demos; noVNC on http://localhost:6080 and :6081
+./harness.sh stop m5         # or one node at a time, by name
 ```
 
 **"Did anyone lose libp2p?"** — after a run, `grep 'module lost' <dir>/stages.txt`;

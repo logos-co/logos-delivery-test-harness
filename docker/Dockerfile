@@ -14,6 +14,7 @@ COPY out/seed-store/ /nix/store/
 COPY out/seed-path   /opt/sim/seed-path
 RUN ln -s "$(cat /opt/sim/seed-path)/bin/logosdeliverynode" /usr/local/bin/logosdeliverynode
 COPY docker/entrypoint-module.sh /opt/sim/entrypoint-module.sh
+COPY docker/profile.sh /opt/sim/profile.sh
 # Every node profile a group can name; the group's `config` picks one.
 COPY conf/ /opt/sim/conf/
 ENV PATH=/opt/logoscore/bin:$PATH
