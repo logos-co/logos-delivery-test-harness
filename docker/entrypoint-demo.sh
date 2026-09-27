@@ -17,6 +17,9 @@ log() { echo "[harness $(hostname)] $*"; }
 . /opt/sim/profile.sh
 
 export DISPLAY=:99 QML_INSPECTOR_PORT=${QML_INSPECTOR_PORT:-3768}
+# A container started again (harness.sh stop, then start) keeps its /tmp, and
+# with it the previous Xvfb's lock: the new one would refuse display :99.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 Xvfb :99 -screen 0 1440x960x24 >/tmp/xvfb.log 2>&1 &
 sleep 1
 x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -quiet >/tmp/x11vnc.log 2>&1 &
@@ -40,9 +43,16 @@ trap 'log "stopping (SIGTERM)"; pkill -TERM -f logos-standalone-app' TERM
 
 ev() { python3 /opt/sim/inspector.py eval "$1"; }
 t0=$(date +%s)
-if ! python3 /opt/sim/inspector.py wait 'root.backend !== null' "${START_TIMEOUT:-60}"; then
-  log "start FAILED: the demo backend never came up"; pkill -f logos-standalone-app; exit 1
-fi
+# Poll here rather than in inspector.py, so an app that dies at once fails at
+# once instead of after the whole timeout.
+until python3 /opt/sim/inspector.py wait 'root.backend !== null' 1; do
+  if ! kill -0 $APP 2>/dev/null; then
+    log "start FAILED: the demo app exited (see its [app] lines)"; exit 1
+  fi
+  if [ $(( $(date +%s) - t0 )) -ge "${START_TIMEOUT:-60}" ]; then
+    log "start FAILED: the demo backend never came up"; pkill -f logos-standalone-app; exit 1
+  fi
+done
 
 # The rendered profile is JSON, and so a valid JS object literal: stringify it
 # in the page rather than quote it through two more layers here.

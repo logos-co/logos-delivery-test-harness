@@ -53,6 +53,8 @@ def demo_builds(comps, lines):
         f'echo "--- libp2p_module (dev variant, for the demo host)  {lp["flake"]}#install"',
         f'nix build -L --no-write-lock-file "{lp["flake"]}#install" -o {GCROOTS}/libp2p-dev',
         f'nix flake metadata --json --no-write-lock-file "{demo["flake"]}" > /out/demo-meta.json',
+        # A copy out of the store is read-only; the next build must replace it.
+        "rm -f /out/demo-wrapper.sh",
         f"cp {GCROOTS}/demo/bin/run-logos-standalone-ui /out/demo-wrapper.sh",
         f"readlink -f {GCROOTS}/libp2p-dev > /out/demo-libp2p-path",
     ]

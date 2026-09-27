@@ -8,6 +8,8 @@
 #   harness.sh up                 gen, then launch each group at its startAfter offset
 #                                 and stop it at its stopAfter; blocks until done
 #   harness.sh run <sec> [dir]    up, run for <sec> from T0, collect into dir, down
+#   harness.sh start <group|node>...  start a group (e.g. a manual one) or node
+#                                 in the running stack; stop does the reverse
 #   harness.sh down [-v]          tear the stack down
 #   harness.sh report [dir] [n]   discovery report over a trace dir (default out/traces),
 #                                 n = nodes expected in the DHT (default: from the plan)
@@ -40,6 +42,7 @@ mkdir -p "$out/traces"
 export PYTHONPATH="$here/lib"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+runlog() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$out/run.log"; }
 
 usage() {
   sed -n '/^#:usage$/,/^#:end$/p' "$0" | sed -e '1d;$d' -e 's/^# \{0,1\}//'
@@ -110,7 +113,6 @@ cmd_up() {
   # would carry the previous run's lookups into this run's report.
   rm -f "$out"/traces/*.trace
   : > "$out/run.log"
-  runlog() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$out/run.log"; }
 
   runlog "manifest $MANIFEST"
   [ -f "$out/resolved.json" ] && runlog "module $($PY -c "
@@ -125,12 +127,13 @@ import json;print(json.load(open('$out/resolved.json'))['module'])")"
   zero=$($PY -c "
 import json
 plan=json.load(open('$out/plan.json'))
-print(' '.join(s for g in plan if g['startAfter']==0 for s in g['services']))")
+print(' '.join(s for g in plan if g['startAfter']==0 and not g.get('manual') for s in g['services']))")
   $PY -c "
 import json
 for g in json.load(open('$out/plan.json')):
+    when = 'manual: harness.sh start ' + g['name'] if g.get('manual') else f'from T0+{g[\"startAfter\"]}s'
     for n, p in g.get('vnc', {}).items():
-        print(f'{n}: http://localhost:{p}/vnc.html  ({g[\"name\"]}, from T0+{g[\"startAfter\"]}s)')" |
+        print(f'{n}: http://localhost:{p}/vnc.html  ({g[\"name\"]}, {when})')" |
     while read -r line; do runlog "noVNC $line"; done
   runlog "T0 -- launching: $zero"
   t0=$(date +%s)
@@ -143,7 +146,7 @@ for g in json.load(open('$out/plan.json')):
   $PY -c "
 import json
 plan=json.load(open('$out/plan.json'))
-ev=[(g['startAfter'],1,'launching',g) for g in plan if g['startAfter']>0]
+ev=[(g['startAfter'],1,'launching',g) for g in plan if g['startAfter']>0 and not g.get('manual')]
 ev+=[(g['stopAfter'],0,'stopping',g) for g in plan if 'stopAfter' in g]
 for at,_,what,g in sorted(ev, key=lambda e: e[:2]):
     print(at, what, g['name'], ' '.join(g['services']))" |
@@ -176,7 +179,7 @@ cmd_run() {
   late=$($PY -c "
 import json
 plan=json.load(open('$out/plan.json'))
-print(' '.join(f\"{g['name']}@{t}s\" for g in plan for t in (g['startAfter'], g.get('stopAfter', 0)) if t >= $duration))")
+print(' '.join(f\"{g['name']}@{t}s\" for g in plan if not g.get('manual') for t in (g['startAfter'], g.get('stopAfter', 0)) if t >= $duration))")
   [ -n "$late" ] && log "warning: scheduled at or after the ${duration}s end, so dropped: $late"
 
   cmd_up & up=$!
@@ -197,6 +200,56 @@ print(' '.join(f\"{g['name']}@{t}s\" for g in plan for t in (g['startAfter'], g.
 
 # --remove-orphans: the compose file is regenerated from the current manifest,
 # so services of a stack started with another one would otherwise survive.
+cmd_manual() {
+  # start|stop <group|node>...: by hand, in the running stack. For manual
+  # groups -- which up and run never launch -- and equally to add or take down
+  # any group or node mid-run. Works on the compose file the stack was brought
+  # up with; nothing is regenerated.
+  local what=$1; shift
+  [ $# -gt 0 ] || { echo "usage: harness.sh $what <group|node>..." >&2; exit 1; }
+  if [ ! -f "$out/plan.json" ] || [ -z "$(dc ps -q prometheus 2>/dev/null)" ]; then
+    echo "harness: no stack is up -- ./harness.sh up first" >&2; exit 1
+  fi
+  local info services needs vnc b at reply
+  info=$($PY - "$out/plan.json" "$@" <<'PY'
+import json, sys
+plan, names = json.load(open(sys.argv[1])), sys.argv[2:]
+node_group = {s: g for g in plan for s in g["services"]}
+services = []
+for n in names:
+    group = next((g for g in plan if g["name"] == n), None)
+    if group:
+        services += group["services"]
+    elif n in node_group:
+        services.append(n)
+    else:
+        sys.exit(f"harness: no group or node named '{n}' in this plan")
+services = list(dict.fromkeys(services))
+needs = {node_group[s].get("joins", {}).get(s) for s in services} - {None} - set(services)
+vnc = [f"{s}: http://localhost:{node_group[s]['vnc'][s]}/vnc.html"
+       for s in services if s in node_group[s].get("vnc", {})]
+print(" ".join(services)); print(" ".join(sorted(needs))); print("|".join(vnc))
+PY
+  ) || exit 1
+  services=$(sed -n 1p <<<"$info"); needs=$(sed -n 2p <<<"$info"); vnc=$(sed -n 3p <<<"$info")
+  at="T0+?"
+  [ -s "$out/t0" ] && at="T0+$(( $(date +%s) - $(cat "$out/t0") ))s"
+  if [ "$what" = start ]; then
+    for b in $needs; do
+      dc ps --status running --services | grep -qx "$b" ||
+        { echo "harness: '$b', the bootstrap they join through, is not running" >&2; exit 1; }
+    done
+    runlog "$at -- starting by hand: $services"
+    # compose narrates every container on stderr; show it only on failure.
+    if ! reply=$(dc up -d --no-deps $services 2>&1); then echo "$reply" >&2; exit 1; fi
+    [ -n "$vnc" ] && tr '|' '\n' <<<"$vnc" | while read -r line; do runlog "noVNC $line"; done
+  else
+    runlog "$at -- stopping by hand: $services"
+    if ! reply=$(dc stop $services 2>&1); then echo "$reply" >&2; exit 1; fi
+  fi
+  return 0
+}
+
 cmd_down() { cmd_gen >/dev/null; dc down --remove-orphans "$@"; }
 
 cmd_report() {
@@ -260,5 +313,7 @@ case "${1:-}" in
   report)  shift; cmd_report "$@" ;;
   collect) shift; cmd_collect "$@" ;;
   run)     shift; cmd_run "$@" ;;
+  start)   shift; cmd_manual start "$@" ;;
+  stop)    shift; cmd_manual stop "$@" ;;
   *) usage; exit 1 ;;
 esac

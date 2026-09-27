@@ -43,6 +43,7 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 | "M startup members / joiners" | one member group, `"role": "member", "count": M, "startAfter": 0, "jitter": 8` — "M mixed" means two groups, one per kind, splitting M |
 | "after X min add a member" | its own member group, `"count": 1, "startAfter": X*60, "jitter": 0` |
 | "K peers leave / close / stop at Y min" | those peers in their own group with `"stopAfter": Y*60` — stops apply to whole groups |
+| "attach X by hand", "I'll add it myself", "not on the schedule" | `"manual": true` on that group (no `startAfter`/`stopAfter`); after `up`, `./harness.sh start <group\|node>` attaches it and `stop` detaches it |
 | "stop a bootstrap at Y min" | `"stopAfter": Y*60` on that bootstrap's group |
 | "members only on bootstrap2" | `"bootstraps": ["bootstrap2"]` on the member group (default: all bootstraps, round-robin) |
 | "a Z min test" | `./harness.sh run <Z*60>` — not a manifest field |
@@ -116,6 +117,11 @@ Timing, precisely:
 - `up` alone runs the same schedule, returns when the last event has happened,
   and leaves the stack running (for Grafana at `http://localhost:3000`). Always
   finish with `./harness.sh collect` and `./harness.sh down -v`.
+
+To change the fleet by hand mid-run -- attach a `manual` group, add or take down
+any group or node -- use `./harness.sh start <group|node>` / `stop`: they act on
+the running stack, refuse to start a member whose bootstrap is down, and log to
+`run.log` with the offset from T0.
 
 For a mid-run look without disturbing anything: `./harness.sh collect <dir>`
 (the stack keeps running), `./promq.sh '<promql>'`, or the stage lines:

@@ -270,6 +270,18 @@ def _check_group(g, names):
     # Absent: they run on.
     if "stopAfter" in g and g["stopAfter"] <= g["startAfter"]:
         _fail(f"group '{g['name']}': stopAfter must come after startAfter")
+    # manual: gen writes the group's services and build builds what they need,
+    # but up/run never launch them -- `harness.sh start <group|node>` does, in
+    # the running stack, and `stop` takes them down again.
+    g.setdefault("manual", False)
+    if g["manual"]:
+        if g["role"] == "bootstrap":
+            _fail(f"group '{g['name']}': a bootstrap cannot be manual -- members join through it from T0")
+        if g["startAfter"] or "stopAfter" in g:
+            _fail(
+                f"group '{g['name']}': a manual group is started and stopped by hand "
+                "(harness.sh start / stop); drop startAfter and stopAfter"
+            )
     if g["kind"] == DEMO_NODE and g["role"] != "member":
         _fail(f"group '{g['name']}': a {DEMO_NODE} node can only be a member")
     if g["kind"] == NATIVE:

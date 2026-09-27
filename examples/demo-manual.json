@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "The default fleet (1 bootstrap, 3 delivery-module members) plus a",
+    "logos-delivery-demo UI that is not on the schedule: bring the fleet up, then",
+    "attach the demo by hand whenever you like, and take it down again.",
+    "  HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh build",
+    "  HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh up",
+    "  ./harness.sh start demo      # noVNC URL printed; stop demo to detach"
+  ],
+  "module": {
+    "_comment": [
+      "Override without editing this file:",
+      "  DELIVERY_MODULE_REF=<branch|tag|full-sha>  DELIVERY_MODULE_REV=<full-sha>",
+      "and likewise DELIVERY_*, LIBP2P_MODULE_*, OPENMETRICS_MODULE_*,",
+      "LOGOSCORE_CLI_* for the dependencies this module otherwise chooses.",
+      "A branch is not a pin: out/resolved.json records the commit it resolved to."
+    ],
+    "flake": "git+https://github.com/logos-co/logos-delivery-module",
+    "ref": "master"
+  },
+  "overrides": {
+    "_comment": [
+      "Only what the chosen module ref cannot supply, or what we deliberately",
+      "differ on. master pins libp2p_module, openmetrics-module and",
+      "logos-delivery in its flake lock, so those are derived.",
+      "logos-logoscore-cli is not the module's own input: its lock only carries",
+      "copies pulled in by other inputs (libp2p_module, logos-test-modules), and",
+      "its docker-compose runs yet another. The harness keeps running 665ac28b,",
+      "the version every recorded run used. `harness.sh resolve` shows each source."
+    ],
+    "logos-logoscore-cli": {
+      "flake": "github:logos-co/logos-logoscore-cli",
+      "rev": "665ac28bc77f45e3c610f40fef975a12609de531"
+    }
+  },
+  "network": {
+    "subnet": "10.0.0.0/8",
+    "clusterId": 42,
+    "shardsInNetwork": 1
+  },
+  "groups": [
+    {
+      "name": "bootstrap",
+      "role": "bootstrap",
+      "kind": "logosdeliverynode",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.0.0.10",
+      "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG"
+      ]
+    },
+    {
+      "name": "members",
+      "role": "member",
+      "kind": "delivery-module",
+      "count": 3,
+      "startAfter": 0,
+      "jitter": 8,
+      "config": "member.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    },
+    {
+      "name": "demo",
+      "role": "member",
+      "kind": "delivery-demo",
+      "count": 1,
+      "manual": true,
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    }
+  ]
+}

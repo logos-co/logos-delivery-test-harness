@@ -215,6 +215,7 @@ def generate(m, compose_path, targets_path, plan_path):
 
     services, targets, plan = [], [], []
     member_no = 0
+    joins = {}  # member service -> the bootstrap service it joins through
     demo_paths = _demo_paths(compose_path) if manifest.uses_demo(m) else None
     vnc = {}
 
@@ -236,6 +237,7 @@ def generate(m, compose_path, targets_path, plan_path):
                 # Round-robin over the whole fleet, so late joiners alternate too.
                 boot = boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]
                 join = manifest.bootstrap_addr(boot)
+                joins[name] = boot["name"]
                 if g["kind"] == NATIVE:
                     services.append(
                         _native_service(g, name, ip, MODULE_TCP_PORT, net_conf, join, boot["name"])
@@ -265,6 +267,10 @@ def generate(m, compose_path, targets_path, plan_path):
             step["stopAfter"] = g["stopAfter"]
         if g["kind"] == DEMO_NODE:
             step["vnc"] = {n: vnc[n] for n in names}
+        if g["manual"]:
+            step["manual"] = True
+        if g["role"] == "member":
+            step["joins"] = {n: joins[n] for n in names}
         plan.append(step)
 
     with open(compose_path, "w") as f:
@@ -294,8 +300,9 @@ if __name__ == "__main__":
     print(f"{total} nodes in {len(plan)} groups")
     for g in plan:
         stop = f"  stop at +{g['stopAfter']}s" if "stopAfter" in g else ""
+        when = " manual" if g.get("manual") else f"+{g['startAfter']:>5}s"
         print(
-            f"  +{g['startAfter']:>5}s  {g['name']:<16} {g['role']:<9} {g['kind']:<17} "
+            f"  {when}  {g['name']:<16} {g['role']:<9} {g['kind']:<17} "
             f"{len(g['services'])} node(s){stop}"
         )
         for n, p in g.get("vnc", {}).items():

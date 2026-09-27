@@ -168,6 +168,11 @@ one offset and optionally stopped at another*:
   killed. Must be later than `startAfter`. Stops apply to a whole group, so
   peers meant to leave get a group of their own. A stopped container keeps its
   logs and trace for `collect`.
+- `manual` (members) — `true` keeps the group off the schedule: `gen` writes
+  its services and `build` builds what they need, but `up` and `run` never
+  launch it. Attach it to the running stack with `harness.sh start <group>`
+  (or one node, `start m4`) and detach it with `stop`, as often as you like. No
+  `startAfter` / `stopAfter` on a manual group.
 - `bootstraps` (members) — the bootstrap groups this group joins through, handed
   out round-robin across the fleet. Default: every bootstrap group. A
   delivery-module member takes one bootstrap peer, because the plugin passes
@@ -269,6 +274,8 @@ registration.
 | `harness.sh up` | gen, start monitoring, launch each group at its `startAfter` and stop it at its `stopAfter`, log to `out/run.log`; returns when the schedule is done and leaves the stack up |
 | `harness.sh run <sec> [dir]` | `up`, wait until T0 + `sec`, `collect` into `dir` (default `out/collect/<utc-stamp>`), `down -v`. Launches or stops scheduled at or after the end are dropped, with a warning |
 | `harness.sh collect [dir]` | snapshot a running stack: stage log, container states, traces, plan and pins, `up`, peers-per-shard and relay-connection metrics, report, and the logs of every bootstrap and logosdeliverynode and of any delivery-module member with an error, a failed stage or a stopped container (`COLLECT_LOGS=all` keeps every log) |
+| `harness.sh start <group\|node>…` | start groups or nodes in the running stack — a `manual` group, or any other mid-run. Refuses when the bootstrap they join through is not running; logs to `run.log` and prints a demo's noVNC URL |
+| `harness.sh stop <group\|node>…` | stop them again (graceful, as for `stopAfter`); `start` brings them back |
 | `harness.sh down [-v]` | tear down |
 | `harness.sh report [dir] [n]` | discovery report over a trace dir (default `out/traces`); `n` nodes expected in the DHT, default from the plan |
 
@@ -391,6 +398,16 @@ printed `http://localhost:608N/vnc.html` URLs while it runs:
 ```bash
 HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh build
 HARNESS_MANIFEST=examples/demo-2-instances.json ./harness.sh run 600 out/collect/demo
+```
+
+**"Bring up the fleet, and let me attach a demo by hand when I want."** —
+[`examples/demo-manual.json`](examples/demo-manual.json) has a `manual` demo group:
+
+```bash
+HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh build
+HARNESS_MANIFEST=examples/demo-manual.json ./harness.sh up
+./harness.sh start demo      # attach; the noVNC URL is printed
+./harness.sh stop demo       # detach; start it again whenever
 ```
 
 **"Did anyone lose libp2p?"** — after a run, `grep 'module lost' <dir>/stages.txt`;
