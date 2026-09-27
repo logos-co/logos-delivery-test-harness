@@ -1,21 +1,28 @@
 """Generate the compose override, the Prometheus target list and the launch plan.
 
-One compose service per node. Members are scattered across the subnet because
-the nim-libp2p registrar scores an advertiser by how many address-prefix bits it
-shares with the ads it already holds (iptree.ipScore), and every shared bit costs
-advertExpiry/32 of waiting -- sequential addresses in one /24 share ~27 bits and
-cost 13-15 minutes per registration.
+One compose service per node. A group's `role` (bootstrap or member) says what
+the node is for; its `kind` says what runs: `logosdeliverynode`, the delivery
+binary with in-process kademlia, or `delivery-module`, a logoscore daemon
+hosting delivery_module with discovery on libp2p_module.
+
+Members are scattered across the subnet because the nim-libp2p registrar scores
+an advertiser by how many address-prefix bits it shares with the ads it already
+holds (iptree.ipScore), and every shared bit costs advertExpiry/32 of waiting --
+sequential addresses in one /24 share ~27 bits and cost 13-15 minutes per
+registration.
 """
 import ipaddress
 import json
 import sys
 
 import manifest
-
-METRICS_PORT = 9100
-SEED_METRICS_PORT = 8008
-MEMBER_P2P_PORT = 45000
-MEMBER_TCP_PORT = 44000
+from manifest import (
+    MODULE_METRICS_PORT,
+    MODULE_P2P_PORT,
+    MODULE_TCP_PORT,
+    NATIVE,
+    NATIVE_METRICS_PORT,
+)
 
 
 def _addresses(net, count, taken):
@@ -32,25 +39,41 @@ def _addresses(net, count, taken):
     return out
 
 
-def _seed_service(g, net_conf, name, dht_entry):
+def _depends(on):
+    if not on:
+        return ""
+    return f"""    depends_on:
+      {on}:
+        condition: service_healthy
+"""
+
+
+def _native_service(g, name, ip, port, net_conf, join, depends_on):
+    """logosdeliverynode, as a bootstrap or a member. `join` is the bootstrap
+    address it joins the DHT through, empty for the first bootstrap."""
     args = [
         "logosdeliverynode",
         f"--cluster-id={net_conf['clusterId']}",
         "--shard=0",
-        f"--nat=extip:{g['ip']}",
-        f"--tcp-port={g['port']}",
-        f"--nodekey={g['nodekey']}",
-    ] + list(g["args"])
-    if dht_entry:
-        # Every seed after the first joins the first one's DHT; otherwise each
-        # seed and the members bootstrapping from it form a network of their own.
-        args.append(f"--kad-bootstrap-node={dht_entry}")
+        f"--nat=extip:{ip}",
+        f"--tcp-port={port}",
+        "--metrics-server=true",
+        "--metrics-server-address=0.0.0.0",
+        f"--metrics-server-port={NATIVE_METRICS_PORT}",
+    ]
+    if "nodekey" in g:
+        args.append(f"--nodekey={g['nodekey']}")
+    args += list(g["args"])
+    if join:
+        args.append(f"--kad-bootstrap-node={join}")
     cmd = "\n".join(f"      - {a}" for a in args)
     return f"""  {name}:
     image: logos-sim:local
     hostname: {name}
     labels:
       harness.group: "{g['name']}"
+      harness.role: "{g['role']}"
+      harness.kind: "{g['kind']}"
     environment:
       # The nix-built binary dlopens libpq at run time; take the one the
       # portable delivery_module bundle ships (Ubuntu's would not resolve
@@ -58,11 +81,11 @@ def _seed_service(g, net_conf, name, dht_entry):
       LD_LIBRARY_PATH: /opt/modules/delivery_module
     command:
 {cmd}
-    networks:
+{_depends(depends_on)}    networks:
       sim:
-        ipv4_address: {g['ip']}
+        ipv4_address: {ip}
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/{g['port']}"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/{port}"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -70,88 +93,104 @@ def _seed_service(g, net_conf, name, dht_entry):
 """
 
 
-def _member_service(g, name, ip, seed_addr, net_conf, seed_service):
+def _module_service(g, name, ip, net_conf, join, depends_on):
+    """A logoscore daemon hosting delivery_module, as a bootstrap or a member.
+    A bootstrap carries a fixed libp2p key, so its DHT address is known ahead."""
     env = {
-        "SEED_ADDR": seed_addr,
+        "BOOTSTRAP_ADDR": join,
         "MEMBER_CONFIG": g["config"],
         "CLUSTER_ID": str(net_conf["clusterId"]),
         "NUM_SHARDS": str(net_conf["shardsInNetwork"]),
         "START_JITTER": str(g["jitter"]),
-        "P2P_PORT": str(MEMBER_P2P_PORT),
-        "TCP_PORT": str(MEMBER_TCP_PORT),
-        "METRICS_PORT": str(METRICS_PORT),
+        "P2P_PORT": str(MODULE_P2P_PORT),
+        "TCP_PORT": str(MODULE_TCP_PORT),
+        "METRICS_PORT": str(MODULE_METRICS_PORT),
     }
+    if g["role"] == "bootstrap":
+        env["LIBP2P_PRIVKEY"] = manifest.libp2p_privkey(g)
     env.update({k: str(v) for k, v in g["env"].items()})
     envblock = "\n".join(f"      {k}: \"{v}\"" for k, v in env.items())
-    depends = ""
-    if seed_service:
-        depends = f"""    depends_on:
-      {seed_service}:
-        condition: service_healthy
+    health = ""
+    if g["role"] == "bootstrap":
+        # Members may join once the DHT port answers; libp2p binds the
+        # container address, not loopback.
+        health = f"""    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/$$(hostname -i | cut -d' ' -f1)/{MODULE_P2P_PORT}"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
 """
     return f"""  {name}:
     image: logos-sim:local
     hostname: {name}
     labels:
       harness.group: "{g['name']}"
-    entrypoint: ["/opt/sim/entrypoint-member.sh"]
+      harness.role: "{g['role']}"
+      harness.kind: "{g['kind']}"
+    entrypoint: ["/opt/sim/entrypoint-module.sh"]
     environment:
 {envblock}
-{depends}    volumes:
+{_depends(depends_on)}    volumes:
       - ./out/traces:/traces
     networks:
       sim:
         ipv4_address: {ip}
-"""
+{health}"""
+
+
+def _target(g, name, ip):
+    port = NATIVE_METRICS_PORT if g["kind"] == NATIVE else MODULE_METRICS_PORT
+    return {
+        "targets": [f"{ip}:{port}"],
+        "labels": {"node": name, "role": g["role"], "kind": g["kind"], "group": g["name"]},
+    }
 
 
 def generate(m, compose_path, targets_path, plan_path):
     net_conf = m["network"]
     net = ipaddress.ip_network(net_conf["subnet"])
 
-    # A seed group holds exactly one seed (manifest.load enforces it), and the
-    # seed's service is named after its group.
-    seeds = {g["name"]: g for g in m["groups"] if g["kind"] == "seed"}
-    taken = {ipaddress.ip_address(g["ip"]) for g in seeds.values()}
-    dht_entry = manifest.seed_addr(next(iter(seeds.values()))) if seeds else ""
+    # A bootstrap group holds exactly one node (manifest.load enforces it), and
+    # its service is named after the group. Every bootstrap after the first
+    # joins the first one's DHT, so they form one network, not several.
+    boots = {g["name"]: g for g in m["groups"] if g["role"] == "bootstrap"}
+    taken = {ipaddress.ip_address(g["ip"]) for g in boots.values()}
+    first = next(iter(boots.values()))
+    dht_entry = manifest.bootstrap_addr(first)
 
     services, targets, plan = [], [], []
     member_no = 0
 
     for g in m["groups"]:
         names = []
-        if g["kind"] == "seed":
-            name = g["name"]
-            first = manifest.seed_addr(g) == dht_entry
-            services.append(_seed_service(g, net_conf, name, "" if first else dht_entry))
-            targets.append(
-                {
-                    "targets": [f"{g['ip']}:{SEED_METRICS_PORT}"],
-                    "labels": {"node": name, "role": "seed", "group": g["name"]},
-                }
-            )
+        if g["role"] == "bootstrap":
+            name, ip = g["name"], g["ip"]
+            join, dep = ("", "") if g is first else (dht_entry, first["name"])
+            if g["kind"] == NATIVE:
+                services.append(_native_service(g, name, ip, g["port"], net_conf, join, dep))
+            else:
+                services.append(_module_service(g, name, ip, net_conf, join, dep))
+            targets.append(_target(g, name, ip))
             names.append(name)
         else:
-            ips = _addresses(net, g["count"], taken)
-            for ip in ips:
+            for ip in _addresses(net, g["count"], taken):
                 member_no += 1
                 name = f"m{member_no}"
                 # Round-robin over the whole fleet, so late joiners alternate too.
-                seed = seeds[g["seeds"][(member_no - 1) % len(g["seeds"])]]
-                services.append(
-                    _member_service(
-                        g, name, ip, manifest.seed_addr(seed), net_conf, seed["name"]
+                boot = boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]
+                join = manifest.bootstrap_addr(boot)
+                if g["kind"] == NATIVE:
+                    services.append(
+                        _native_service(g, name, ip, MODULE_TCP_PORT, net_conf, join, boot["name"])
                     )
-                )
-                targets.append(
-                    {
-                        "targets": [f"{ip}:{METRICS_PORT}"],
-                        "labels": {"node": name, "role": "member", "group": g["name"]},
-                    }
-                )
+                else:
+                    services.append(_module_service(g, name, ip, net_conf, join, boot["name"]))
+                targets.append(_target(g, name, ip))
                 names.append(name)
         step = {
             "name": g["name"],
+            "role": g["role"],
             "kind": g["kind"],
             "startAfter": g["startAfter"],
             "services": names,
@@ -184,5 +223,6 @@ if __name__ == "__main__":
     for g in plan:
         stop = f"  stop at +{g['stopAfter']}s" if "stopAfter" in g else ""
         print(
-            f"  +{g['startAfter']:>5}s  {g['name']:<16} {len(g['services'])} node(s){stop}"
+            f"  +{g['startAfter']:>5}s  {g['name']:<16} {g['role']:<9} {g['kind']:<17} "
+            f"{len(g['services'])} node(s){stop}"
         )

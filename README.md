@@ -1,8 +1,9 @@
 # logos-delivery-test-harness
 
-A container fleet for exercising logos-delivery: one or more seeds, any number
-of plugin-hosted member nodes joining and leaving on a schedule, Prometheus and
-provisioned Grafana dashboards.
+A container fleet for exercising logos-delivery: one or more bootstrap nodes and
+any number of members, each either a native `logosdeliverynode` or a
+delivery-module node (logoscore + delivery_module + libp2p_module), joining and
+leaving on a schedule, with Prometheus and provisioned Grafana dashboards.
 
 Driving it from an agent (Claude Code, Codex, ...)? [AGENTS.md](AGENTS.md) is the
 operating manual, and [Prompt examples](#prompt-examples) below shows requests it
@@ -39,7 +40,7 @@ flake lock, so the harness always builds a coherent set:
 | Component | Where its revision comes from |
 |---|---|
 | `logos-delivery-module` | `module.ref` in the manifest — `master` by default (branch, tag or `rev`) |
-| `logos-delivery` (the seed binary, and what delivery_module is built against) | the module's lock |
+| `logos-delivery` (the logosdeliverynode binary, and what delivery_module is built against) | the module's lock |
 | `libp2p_module` | the module's lock |
 | `openmetrics-module` | the module's lock |
 | `logos-logoscore-cli` | `overrides` — see [Overrides](#overrides) |
@@ -79,15 +80,15 @@ Setting a component's variables is the same thing as writing an override, so
 `module-lock` — **the module keeps driving its dependencies unless you say
 otherwise**, which is the point of the design.
 
-#### `DELIVERY_*` moves the whole fleet, not just the seed
+#### `DELIVERY_*` moves the whole fleet, not just the native nodes
 
 logos-delivery is built twice over: once directly, as the `logosdeliverynode`
-binary the seed runs, and once *inside* the module's build, where
-`delivery_module` — what the members run — is compiled against the module's
+binary the native nodes run, and once *inside* the module's build, where
+`delivery_module` — what delivery-module nodes run — is compiled against the module's
 `logos-delivery` input. Two separate nix invocations.
 
 So a chosen delivery is also passed to the module's build as
-`--override-input logos-delivery …`, and seed and members move together. Without
+`--override-input logos-delivery …`, and both kinds of node move together. Without
 that the fleet would quietly be built from two different deliveries, which is
 not something either `resolved.json` or a running node would show you.
 
@@ -124,60 +125,86 @@ carrying only `rev` swaps the revision of a component the module does pin.
 `override` or `manifest`, so what is derived and what is imposed is visible
 before anything is built.
 
-> The shipped seed arguments and member profile use the plugin-discovery flags
+> The shipped logosdeliverynode arguments and member profile use the plugin-discovery flags
 > (`--enable-kad-discovery`, `--max-pure-libp2p-peers`, `plugin-kad-discovery`).
 > A module ref from before that work landed rejects them; change both together.
 
 ### Groups
 
-A group is *n nodes sharing one profile, launched at one offset and optionally
-stopped at another*:
+A group is *n nodes of one role and one kind, sharing one profile, launched at
+one offset and optionally stopped at another*:
 
 ```json
-{ "name": "late-5min", "kind": "member", "count": 1,
+{ "name": "late-5min", "role": "member", "kind": "delivery-module", "count": 1,
   "startAfter": 300, "jitter": 0, "config": "member.json.tpl" }
 
-{ "name": "leavers", "kind": "member", "count": 3,
+{ "name": "leavers", "role": "member", "count": 3,
   "startAfter": 0, "stopAfter": 600, "jitter": 8 }
 ```
 
-- `kind` — `seed` (native `logosdeliverynode`, in-process kademlia) or `member`
-  (logos-core daemon hosting delivery_module + libp2p_module).
-- `count` + `config` — n nodes with profile x, m nodes with profile y. Profiles
-  live in `conf/` and are rendered per node (`@IP@`, `@SEED@`, `@LOOKUP@`,
-  `@CLUSTER@`, `@SHARDS@`, `@TCP_PORT@`).
+- `role` — `bootstrap` (a fixed, known node the others join the DHT through) or
+  `member`.
+- `kind` — what runs. Any role can be either:
+
+  | `kind` | Runs | Default for |
+  |---|---|---|
+  | `logosdeliverynode` | the delivery node binary, kademlia in-process; configured by the group's `args` | `bootstrap` |
+  | `delivery-module` | a logoscore daemon hosting delivery_module, discovery hosted on libp2p_module; configured by the group's `config` profile | `member` |
+
+- `count` — n nodes. Bootstrap groups hold exactly one (below).
+- `config` (delivery-module) — the profile in `conf/`, rendered per node
+  (`@IP@`, `@BOOTSTRAPS@`, `@LOOKUP@`, `@CLUSTER@`, `@SHARDS@`, `@TCP_PORT@`).
+- `args` (logosdeliverynode) — the node's behaviour flags. The harness sets
+  identity, network, metrics and bootstrap flags itself (`--cluster-id`,
+  `--shard`, `--nat`, `--tcp-port`, `--nodekey`, `--metrics-server*`,
+  `--kad-bootstrap-node`) and rejects them in `args`.
 - `startAfter` — seconds from T0, where T0 is when the offset-0 groups launch.
 - `stopAfter` — seconds from T0 at which the group's containers are stopped
-  with `docker compose stop`. A member's entrypoint passes the SIGTERM to the
-  logoscore daemon, which stops its modules and exits; a seed gets it directly.
-  Anything still running 10 s later is killed. Must be later than `startAfter`. Stops apply to a whole group, so peers meant to leave get a group
-  of their own. A stopped container keeps its logs and trace for `collect`.
-- `seeds` (members only) — the seed groups this group bootstraps from, handed
-  out round-robin across the fleet. Default: every seed group. Each member gets
-  one bootstrap peer, because the plugin passes libp2p only the first.
-- `jitter` — random 0..n second spread within the group. N daemons loading
-  plugins at the same instant trip logos-core's 10 s plugin-load timeout.
-- `env` — extra environment for the group's containers. The rest of a member's
-  settings are derived (`SEED_ADDR`, `CLUSTER_ID`, `NUM_SHARDS`, ports), but
-  these are only reachable here: `LOOKUP_INTERVAL` (seconds, into the rendered
-  profile), `MESH_CONTENT_TOPIC` (what the member subscribes to, default
+  with `docker compose stop`. A delivery-module node's entrypoint passes the
+  SIGTERM to the logoscore daemon, which stops its modules and exits; a
+  logosdeliverynode gets it directly. Anything still running 10 s later is
+  killed. Must be later than `startAfter`. Stops apply to a whole group, so
+  peers meant to leave get a group of their own. A stopped container keeps its
+  logs and trace for `collect`.
+- `bootstraps` (members) — the bootstrap groups this group joins through, handed
+  out round-robin across the fleet. Default: every bootstrap group. A
+  delivery-module member takes one bootstrap peer, because the plugin passes
+  libp2p only the first.
+- `jitter` — random 0..n second spread within a delivery-module group. N daemons
+  loading plugins at the same instant trip logos-core's 10 s plugin-load timeout.
+- `env` — extra environment for the group's delivery-module containers. The rest
+  is derived (`BOOTSTRAP_ADDR`, `CLUSTER_ID`, `NUM_SHARDS`, ports), but these are
+  only reachable here: `LOOKUP_INTERVAL` (seconds, into the rendered profile),
+  `MESH_CONTENT_TOPIC` (what the node subscribes to, default
   `/sim/1/mesh/proto`), `P2P_MAX_CONNS` (the plugin host's connection limits,
   default 100), `LD_DISCO_TRACE` (where the plugin writes its trace).
 
-A **seed** group holds exactly one seed, the native `logosdeliverynode`:
+A **bootstrap** group holds exactly one node, at a fixed address with a fixed
+identity, so the others know where to join before it starts:
 
 ```json
-{ "name": "seed2", "kind": "seed", "count": 1, "ip": "10.0.0.20", "port": 44001,
-  "nodekey": "8888888888888888888888888888888888888888888888888888888888888888",
+{ "name": "bootstrap-native", "role": "bootstrap", "kind": "logosdeliverynode", "count": 1,
+  "ip": "10.0.0.10",
+  "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
   "args": ["--entry-layer=kernel", "--relay=true", "--enable-kad-discovery=true", "..."] }
+
+{ "name": "bootstrap-module", "role": "bootstrap", "kind": "delivery-module", "count": 1,
+  "ip": "10.0.0.20",
+  "nodekey": "8888888888888888888888888888888888888888888888888888888888888888" }
 ```
 
 - `ip` — a fixed address; `10.0.0.11` and `10.0.0.12` are Prometheus and Grafana.
-- `nodekey` — 64 hex digits of a secp256k1 key. `peerId` is derived from it; one
-  that is given anyway must match.
-- `args` — the seed's command line after the identity flags. Copy the first seed's.
-- Every seed after the first gets `--kad-bootstrap-node=<first seed>` added, so all
-  seeds share one DHT rather than each forming its own network.
+- `nodekey` — 64 hex digits of a secp256k1 key. A logosdeliverynode takes it as
+  its node key and is joined on its own port (`port`, default 44001). A
+  delivery-module bootstrap hands it to libp2p_module as `privKey`, and is joined
+  on libp2p's port 45000 — its DHT runs there, not in delivery. Either way the
+  `peerId` is derived from the key; one that is given anyway must match.
+- Every bootstrap after the first joins the first one's DHT (the harness adds the
+  bootstrap flag, or the profile entry), so all bootstraps form one network.
+
+logosdeliverynode nodes write no discovery trace and no stage log, so `report`
+and the `module lost` watchdog cover delivery-module nodes only; `collect` keeps
+every logosdeliverynode's log instead, and Prometheus scrapes both kinds.
 
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
@@ -197,7 +224,7 @@ registration.
 | `harness.sh gen` | write `out/compose.groups.yml`, `out/prom-targets.json`, `out/plan.json` |
 | `harness.sh up` | gen, start monitoring, launch each group at its `startAfter` and stop it at its `stopAfter`, log to `out/run.log`; returns when the schedule is done and leaves the stack up |
 | `harness.sh run <sec> [dir]` | `up`, wait until T0 + `sec`, `collect` into `dir` (default `out/collect/<utc-stamp>`), `down -v`. Launches or stops scheduled at or after the end are dropped, with a warning |
-| `harness.sh collect [dir]` | snapshot a running stack: stage log, container states, traces, plan and pins, `up` and peers-per-shard metrics, report, and the logs of the seeds and of any member with an error, a failed stage or a stopped container (`COLLECT_LOGS=all` keeps every log) |
+| `harness.sh collect [dir]` | snapshot a running stack: stage log, container states, traces, plan and pins, `up`, peers-per-shard and relay-connection metrics, report, and the logs of every bootstrap and logosdeliverynode and of any delivery-module member with an error, a failed stage or a stopped container (`COLLECT_LOGS=all` keeps every log) |
 | `harness.sh down [-v]` | tear down |
 | `harness.sh report [dir] [n]` | discovery report over a trace dir (default `out/traces`); `n` nodes expected in the DHT, default from the plan |
 
@@ -211,7 +238,7 @@ Revisions, covered [above](#choosing-revisions-from-the-environment):
 | Variable | Overrides |
 |---|---|
 | `DELIVERY_MODULE_REF` / `_REV` / `_FLAKE` | logos-delivery-module — the pin everything else follows |
-| `DELIVERY_REF` / `_REV` / `_FLAKE` | logos-delivery — **seed and members both** |
+| `DELIVERY_REF` / `_REV` / `_FLAKE` | logos-delivery — **both kinds of node** |
 | `LIBP2P_MODULE_REF` / `_REV` / `_FLAKE` | libp2p_module |
 | `OPENMETRICS_MODULE_REF` / `_REV` / `_FLAKE` | openmetrics-module |
 | `LOGOSCORE_CLI_REF` / `_REV` / `_FLAKE` | logos-logoscore-cli |
@@ -257,31 +284,45 @@ and `collect` copy both into the collect directory, next to the measurements.
 Requests an agent working in this repo can turn into a run (see
 [AGENTS.md](AGENTS.md) for how). Each is a manifest plus one command.
 
-**"Run a 30 min test with 2 seeds and 15 startup joiners, after 2 min add another
-member, after 12 min add another."** — exactly
-[`examples/2-seeds-15-members-late-2-12min.json`](examples/2-seeds-15-members-late-2-12min.json):
+**"Run a 30 min test with 2 bootstraps and 15 startup joiners, after 2 min add
+another member, after 12 min add another."** — exactly
+[`examples/2-bootstraps-15-members-late-2-12min.json`](examples/2-bootstraps-15-members-late-2-12min.json):
 
 ```bash
-HARNESS_MANIFEST=examples/2-seeds-15-members-late-2-12min.json \
-  ./harness.sh run 1800 out/collect/2seeds-30min
+HARNESS_MANIFEST=examples/2-bootstraps-15-members-late-2-12min.json \
+  ./harness.sh run 1800 out/collect/2bootstraps-30min
+```
+
+**"Two bootstraps, one native and one module, 30 members of both kinds, a late
+joiner of each kind, 25 minutes."** — exactly
+[`examples/mixed-2-bootstraps-30-members.json`](examples/mixed-2-bootstraps-30-members.json):
+
+```bash
+HARNESS_MANIFEST=examples/mixed-2-bootstraps-30-members.json \
+  ./harness.sh run 1500 out/collect/mixed-25min
 ```
 
 **"Same, but 3 of the startup members leave after 10 minutes."** — split them into
 their own group with a stop time:
 
 ```json
-{ "name": "members", "kind": "member", "count": 12, "startAfter": 0, "jitter": 8 },
-{ "name": "leave-10min", "kind": "member", "count": 3, "startAfter": 0, "stopAfter": 600, "jitter": 8 }
+{ "name": "module", "role": "member", "kind": "delivery-module", "count": 12, "startAfter": 0, "jitter": 8 },
+{ "name": "leave-10min", "role": "member", "kind": "delivery-module", "count": 3, "startAfter": 0, "stopAfter": 600, "jitter": 8 }
 ```
 
-**"Stop the second seed at 5 minutes and see whether its members stay discoverable."**
-— `"stopAfter": 300` on `seed2`. Its members keep running.
+**"Stop the module bootstrap at 5 minutes and see whether its members stay
+discoverable."** — `"stopAfter": 300` on `bootstrap-module`. Its members keep running.
 
-**"Put the late joiners on seed2 only."** — `"seeds": ["seed2"]` on those groups.
+**"Put the late joiners on the native bootstrap only."** —
+`"bootstraps": ["bootstrap-native"]` on those groups.
+
+**"Only native nodes."** — every group `"kind": "logosdeliverynode"`, members
+with the same `args` as the bootstrap. `report` then has no traces to read, so
+judge the run from Prometheus and the node logs.
 
 **"Rerun the 37-node test on delivery PR #1234 for 25 minutes."** — take the PR's
 head commit (`gh pr view 1234 --repo logos-messaging/logos-delivery --json headRefOid`)
-and override delivery, which moves the seed and the members together:
+and override delivery, which moves both kinds of node together:
 
 ```bash
 DELIVERY_REF=<full sha> HARNESS_MANIFEST=examples/37-node-late-2-12min.json \
@@ -291,7 +332,7 @@ DELIVERY_REF=<full sha> HARNESS_MANIFEST=examples/37-node-late-2-12min.json \
 ```
 
 **"A 10 minute smoke on logos-delivery-module commit X."** — the default manifest
-(1 seed, 3 members):
+(1 bootstrap, 3 members):
 
 ```bash
 DELIVERY_MODULE_REF=<full sha> ./harness.sh build

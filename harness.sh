@@ -13,7 +13,7 @@
 #                                 n = nodes expected in the DHT (default: from the plan)
 #   harness.sh collect [dir]      snapshot a running stack into dir (default
 #                                 out/collect/<utc-stamp>): stages, states, traces,
-#                                 metrics, report, and the seed's and any troubled
+#                                 metrics, report, and the bootstraps' and any troubled
 #                                 member's log (COLLECT_LOGS=all keeps every log)
 #
 # Host requirements: docker, bash, python3. Nix runs only inside the builder
@@ -111,8 +111,8 @@ import json;print(json.load(open('$out/resolved.json'))['module'])")"
   runlog "starting monitoring"
   dc up -d prometheus grafana >/dev/null
 
-  # Groups at offset 0 go first; the seeds among them gate the rest, because a
-  # member cannot bootstrap before its seed answers.
+  # Groups at offset 0 go first; the bootstraps among them gate the rest,
+  # because a member cannot join before its bootstrap answers.
   local zero t0
   zero=$($PY -c "
 import json
@@ -123,7 +123,7 @@ print(' '.join(s for g in plan if g['startAfter']==0 for s in g['services']))")
   echo "$t0" > "$out/t0"
   dc up -d $zero >/dev/null
 
-  # Every later launch and every stop, in time order. --no-deps: a seed that
+  # Every later launch and every stop, in time order. --no-deps: a bootstrap that
   # was stopped on schedule must stay stopped when a late member arrives.
   # `run` ends the schedule early by creating out/abort.
   $PY -c "
@@ -181,10 +181,12 @@ print(' '.join(f\"{g['name']}@{t}s\" for g in plan for t in (g['startAfter'], g.
   log "stack down"
 }
 
-cmd_down() { cmd_gen >/dev/null; dc down "$@"; }
+# --remove-orphans: the compose file is regenerated from the current manifest,
+# so services of a stack started with another one would otherwise survive.
+cmd_down() { cmd_gen >/dev/null; dc down --remove-orphans "$@"; }
 
 cmd_report() {
-  # Every node the plan launches, the seed included, should end up in the DHT.
+  # Every node the plan launches, bootstraps included, should end up in the DHT.
   local dir=${1:-$out/traces} n
   n=${2:-$($PY -c "import json;print(sum(len(g['services']) for g in json.load(open('$out/plan.json'))))")}
   $PY "$here/lib/disco_report.py" "$dir" "$n"
@@ -200,9 +202,14 @@ cmd_collect() {
   cp "$out/run.log" "$out/plan.json" "$out/resolved.json" "$dir/" 2>/dev/null || true
   "$here/promq.sh" up > "$dir/q_up.json" 2>&1 || true
   "$here/promq.sh" logos_delivery_connected_peers_per_shard > "$dir/q_peers.json" 2>&1 || true
+  # Relay connections per node, both directions: the one peer figure both kinds
+  # export (a logosdeliverynode has no per-shard gauge).
+  "$here/promq.sh" 'sum by (node, role, kind) (logos_delivery_connected_peers{protocol="/vac/waku/relay/2.0.0"})' \
+    > "$dir/q_relay.json" 2>&1 || true
 
   # A container log is a few MB, so by default keep only those with something to
-  # explain: the seeds, and a member whose trace carries an error, whose stage log
+  # explain: every bootstrap and every logosdeliverynode (no trace to judge them
+  # by), and a module member whose trace carries an error, whose stage log
   # says FAILED, REFUSED or lost, or whose container is no longer running.
   if [ "${COLLECT_LOGS:-flagged}" = all ]; then
     keep=$(dc ps -a --format '{{.Service}}')
@@ -210,7 +217,7 @@ cmd_collect() {
     keep=$({
       $PY -c "
 import json
-print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['kind']=='seed' for s in g['services']))"
+print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['role']=='bootstrap' or g['kind']=='logosdeliverynode' for s in g['services']))"
       grep -lE 'ERR|UNAVAILABLE|timeout|FAILED' "$out"/traces/*.trace 2>/dev/null |
         sed 's|.*/||; s|\.trace$||'
       sed -nE 's/^\[harness ([^]]+)\] .*(FAILED|REFUSED|module lost).*/\1/p' "$dir/stages.txt"

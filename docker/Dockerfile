@@ -8,12 +8,12 @@ RUN apt-get update && \
 # scans: logoscore's built-ins plus delivery_module, libp2p_module, openmetrics.
 COPY out/logoscore /opt/logoscore
 COPY out/modules   /opt/modules
-# The seed binary keeps its nix closure (glibc, openssl, ... via rpath); libpq
+# The logosdeliverynode binary keeps its nix closure (glibc, openssl, ... via rpath); libpq
 # is dlopen-ed at run time, hence the apt package above.
 COPY out/seed-store/ /nix/store/
 COPY out/seed-path   /opt/sim/seed-path
 RUN ln -s "$(cat /opt/sim/seed-path)/bin/logosdeliverynode" /usr/local/bin/logosdeliverynode
-COPY docker/entrypoint-member.sh /opt/sim/entrypoint-member.sh
+COPY docker/entrypoint-module.sh /opt/sim/entrypoint-module.sh
 # Every node profile a group can name; the group's `config` picks one.
 COPY conf/ /opt/sim/conf/
 ENV PATH=/opt/logoscore/bin:$PATH

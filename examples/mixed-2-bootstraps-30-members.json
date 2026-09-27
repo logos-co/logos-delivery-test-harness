@@ -1,8 +1,9 @@
 {
   "_comment": [
-    "One pin only: the logos-delivery-module ref. Every other component is derived",
-    "from that module's own flake lock, so the harness always builds a coherent set.",
-    "Use `overrides` to force a component away from what the module pins."
+    "Mixed fleet: a logosdeliverynode bootstrap and a delivery-module bootstrap;",
+    "30 members at T0, 15 of each kind, joining through the two bootstraps",
+    "round-robin; one native member joins at T0+2min and one module member at",
+    "T0+12min. Run: HARNESS_MANIFEST=examples/mixed-2-bootstraps-30-members.json ./harness.sh run 1500"
   ],
   "module": {
     "_comment": [
@@ -37,7 +38,7 @@
   },
   "groups": [
     {
-      "name": "bootstrap",
+      "name": "bootstrap-native",
       "role": "bootstrap",
       "kind": "logosdeliverynode",
       "count": 1,
@@ -60,13 +61,76 @@
       ]
     },
     {
-      "name": "members",
+      "name": "bootstrap-module",
+      "role": "bootstrap",
+      "kind": "delivery-module",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.0.0.20",
+      "nodekey": "8888888888888888888888888888888888888888888888888888888888888888",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    },
+    {
+      "name": "native",
+      "role": "member",
+      "kind": "logosdeliverynode",
+      "count": 15,
+      "startAfter": 0,
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG"
+      ]
+    },
+    {
+      "name": "module",
       "role": "member",
       "kind": "delivery-module",
-      "count": 3,
+      "count": 15,
       "startAfter": 0,
       "jitter": 8,
-      "config": "member.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15"
+      }
+    },
+    {
+      "name": "late-2min-native",
+      "role": "member",
+      "kind": "logosdeliverynode",
+      "count": 1,
+      "startAfter": 120,
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG"
+      ]
+    },
+    {
+      "name": "late-12min-module",
+      "role": "member",
+      "kind": "delivery-module",
+      "count": 1,
+      "startAfter": 720,
       "env": {
         "LOOKUP_INTERVAL": "15"
       }

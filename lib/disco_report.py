@@ -9,7 +9,7 @@ import glob, os, re, statistics, sys
 from datetime import datetime, timedelta
 
 out = sys.argv[1]
-expected = int(sys.argv[2])  # members + seed
+expected = int(sys.argv[2])  # every node the plan launches
 traces = sorted(glob.glob(os.path.join(out, "*.trace")))
 
 ts_re = re.compile(r"^\[(\d\d:\d\d:\d\d)\] (.*)$")
@@ -70,7 +70,8 @@ def pct(xs, p):
     xs = sorted(xs)
     return xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))] if xs else float("nan")
 
-print(f"members: {members}  expected ids in the DHT: {expected}  distinct ids seen anywhere: {len(all_ids)}")
+print(f"traced nodes (delivery-module): {members}  expected ids in the DHT: {expected}  distinct ids seen anywhere: {len(all_ids)}")
+print("  (logosdeliverynode nodes write no trace: they count in the expected set, not in the rows below)")
 print(f"backend ready: {ok_backend}/{members}   advertised /logos/delivery: {ok_advert}/{members}   plugin errors: {sum(r['errors'] for r in rows)}")
 print(f"members whose lookups found peers: {len(with_hit)}/{members}")
 if latencies:

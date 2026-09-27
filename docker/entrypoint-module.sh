@@ -1,7 +1,8 @@
 #!/bin/bash
-# Entrypoint of a member container: one logoscore daemon hosting delivery_module
-# and the libp2p_module its discovery runs on, the delivery node created from the profile
-# the node's group names, started and subscribed. Discovery traces go to /traces.
+# Entrypoint of a delivery-module container, bootstrap or member: one logoscore
+# daemon hosting delivery_module and the libp2p_module its discovery runs on, the
+# delivery node created from the profile the node's group names, started and
+# subscribed. Discovery traces go to /traces.
 set -u
 log() { echo "[harness $(hostname)] $*"; }
 
@@ -14,17 +15,25 @@ LOOKUP=${LOOKUP_INTERVAL:-15}
 CLUSTER_ID=${CLUSTER_ID:-42}
 NUM_SHARDS=${NUM_SHARDS:-1}
 MEMBER_CONFIG=${MEMBER_CONFIG:-member.json.tpl}
-: "${SEED_ADDR:?SEED_ADDR (/ip4/../tcp/../p2p/..) is required}"
+# The DHT peer to join through (/ip4/../tcp/../p2p/..). Empty for the first
+# bootstrap, which is where the DHT starts: libp2p then takes no bootstrap peer.
+BOOTSTRAP_ADDR=${BOOTSTRAP_ADDR:-}
 
 # libp2p_module defaults to /ip4/127.0.0.1/tcp/0; bind the container address so
 # the records it publishes are dialable from the other containers.
-export LIBP2P_MODULE_CONFIG="{\"addrs\":[\"/ip4/${IP}/tcp/${P2P_PORT}\"],\"transport\":\"tcp\",\"maxConnections\":${P2P_MAX_CONNS:-100},\"maxInConnections\":$(( ${P2P_MAX_CONNS:-100} / 2 )),\"maxOutConnections\":$(( ${P2P_MAX_CONNS:-100} / 2 ))}"
+# A bootstrap also gets a fixed key (LIBP2P_PRIVKEY), so the DHT address its
+# members join through is known before it starts.
+privkey=""
+[ -n "${LIBP2P_PRIVKEY:-}" ] && privkey=",\"privKey\":\"${LIBP2P_PRIVKEY}\""
+export LIBP2P_MODULE_CONFIG="{\"addrs\":[\"/ip4/${IP}/tcp/${P2P_PORT}\"],\"transport\":\"tcp\",\"maxConnections\":${P2P_MAX_CONNS:-100},\"maxInConnections\":$(( ${P2P_MAX_CONNS:-100} / 2 )),\"maxOutConnections\":$(( ${P2P_MAX_CONNS:-100} / 2 ))${privkey}}"
 export LD_DISCO_TRACE=${LD_DISCO_TRACE:-/traces/$(hostname).trace}
 mkdir -p /data "$(dirname "$LD_DISCO_TRACE")"
 
 tpl=/opt/sim/conf/$MEMBER_CONFIG
 [ -f "$tpl" ] || { log "no such node profile: $MEMBER_CONFIG"; exit 1; }
-sed -e "s|@IP@|$IP|g" -e "s|@SEED@|$SEED_ADDR|g" -e "s|@LOOKUP@|$LOOKUP|g" \
+bootstraps=""
+[ -n "$BOOTSTRAP_ADDR" ] && bootstraps="\"$BOOTSTRAP_ADDR\""
+sed -e "s|@IP@|$IP|g" -e "s|@BOOTSTRAPS@|$bootstraps|g" -e "s|@LOOKUP@|$LOOKUP|g" \
     -e "s|@CLUSTER@|$CLUSTER_ID|g" -e "s|@SHARDS@|$NUM_SHARDS|g" \
     -e "s|@TCP_PORT@|$TCP_PORT|g" \
     "$tpl" > /data/member.json
@@ -35,7 +44,7 @@ if [ "${START_JITTER:-0}" -gt 0 ]; then
   sleep $(( $(od -An -N2 -tu2 /dev/urandom) % START_JITTER ))
 fi
 
-log "daemon starting (profile $MEMBER_CONFIG, ip $IP, libp2p tcp $P2P_PORT, seed $SEED_ADDR)"
+log "daemon starting (profile $MEMBER_CONFIG, ip $IP, libp2p tcp $P2P_PORT, bootstrap ${BOOTSTRAP_ADDR:-none: this node starts the DHT})"
 logoscore daemon -m /opt/modules --persistence-path /data &
 DAEMON=$!
 WATCHDOG=

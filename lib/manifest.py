@@ -31,11 +31,11 @@ ENV_PREFIX = {
     "logos-logoscore-cli": "LOGOSCORE_CLI",
 }
 
-INFRA_HOSTS = 256  # first addresses of the subnet: seeds, prometheus, grafana
-# Fixed in docker-compose.yml; a seed placed here would collide.
+INFRA_HOSTS = 256  # first addresses of the subnet: bootstraps, prometheus, grafana
+# Fixed in docker-compose.yml; a bootstrap placed here would collide.
 RESERVED_IPS = {"10.0.0.11": "prometheus", "10.0.0.12": "grafana"}
 
-# secp256k1, for deriving a seed's peer id from its nodekey.
+# secp256k1, for deriving a bootstrap's peer id from its nodekey.
 _P = 2**256 - 2**32 - 977
 _N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 _G = (
@@ -43,6 +43,28 @@ _G = (
     0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8,
 )
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+ROLES = ("bootstrap", "member")
+NATIVE = "logosdeliverynode"  # the delivery node binary, in-process kademlia
+MODULE_NODE = "delivery-module"  # logoscore + delivery_module + libp2p_module
+KINDS = (NATIVE, MODULE_NODE)
+DEFAULT_KIND = {"bootstrap": NATIVE, "member": MODULE_NODE}
+
+# Ports inside every container. A native node listens on its tcp port and is
+# its own DHT peer; a module node's DHT runs on libp2p_module's port, under the
+# libp2p key, so that is the address a peer bootstraps from.
+NATIVE_BOOTSTRAP_PORT = 44001
+NATIVE_METRICS_PORT = 8008
+MODULE_TCP_PORT = 44000
+MODULE_P2P_PORT = 45000
+MODULE_METRICS_PORT = 9100
+
+# Flags the harness sets on every native node itself; a group's args would
+# only fight them.
+HARNESS_OWNED_FLAGS = (
+    "--cluster-id", "--shard", "--nat", "--tcp-port", "--nodekey",
+    "--metrics-server", "--kad-bootstrap-node",
+)
 
 
 def _fail(msg):
@@ -112,7 +134,8 @@ def peer_id(nodekey):
 
     Identity multihash over the protobuf PublicKey (type 2 = secp256k1, the
     33-byte compressed point), base58btc -- what logosdeliverynode --nodekey
-    turns into. Lets a seed be declared by its key alone.
+    turns into, and what libp2p_module makes of the same key as its privKey.
+    Lets a bootstrap be declared by its key alone.
     """
     if len(nodekey) != 64:
         raise ValueError("nodekey must be 64 hex digits")
@@ -164,45 +187,31 @@ def load(path):
         _fail("manifest.groups is empty")
 
     names = set()
-    seed_ips = {}
+    bootstrap_ips = {}
     for g in groups:
-        for key in ("name", "kind", "count"):
-            if key not in g:
-                _fail(f"group is missing '{key}': {g}")
-        if g["kind"] not in ("seed", "member"):
-            _fail(f"group '{g['name']}': kind must be seed or member")
-        if g["name"] in names:
-            _fail(f"duplicate group name '{g['name']}'")
-        names.add(g["name"])
-        g.setdefault("startAfter", 0)
-        g.setdefault("jitter", 0)
-        g.setdefault("env", {})
-        # stopAfter: seconds from T0 at which the group's containers are
-        # stopped (SIGTERM, then compose's 10 s grace). Absent: they run on.
-        if "stopAfter" in g and g["stopAfter"] <= g["startAfter"]:
-            _fail(f"group '{g['name']}': stopAfter must come after startAfter")
-        if g["kind"] == "member":
-            g.setdefault("config", "member.json.tpl")
-        else:
-            _check_seed(g, seed_ips)
+        _check_group(g, names)
+        if g["role"] == "bootstrap":
+            _check_bootstrap(g, bootstrap_ips)
 
-    seeds = [g["name"] for g in groups if g["kind"] == "seed"]
+    bootstraps = [g["name"] for g in groups if g["role"] == "bootstrap"]
+    if not bootstraps:
+        _fail("manifest has no bootstrap group; members need one to join through")
     for g in groups:
-        if g["kind"] != "member":
+        if g["role"] != "member":
             continue
-        # The seeds this group's members bootstrap from, handed out round-robin.
-        # A member takes a single bootstrap peer: the plugin passes libp2p only
-        # the first (see run-node.md, "Plugin-hosted discovery").
-        g.setdefault("seeds", seeds)
-        for s in g["seeds"]:
-            if s not in seeds:
-                _fail(f"group '{g['name']}': no seed group named '{s}'")
-            seed = next(x for x in groups if x["name"] == s)
-            # compose would otherwise start the seed early, as a dependency.
-            if seed["startAfter"] > g["startAfter"]:
-                _fail(f"group '{g['name']}' starts before its seed '{s}'")
-        if not g["seeds"]:
-            _fail(f"group '{g['name']}': members need a seed group to bootstrap from")
+        # The bootstraps this group's members join through, handed out
+        # round-robin. A module member takes a single bootstrap peer: the plugin
+        # passes libp2p only the first (see run-node.md, "Plugin-hosted discovery").
+        g.setdefault("bootstraps", bootstraps)
+        if not g["bootstraps"]:
+            _fail(f"group '{g['name']}': members need a bootstrap to join through")
+        for b in g["bootstraps"]:
+            if b not in bootstraps:
+                _fail(f"group '{g['name']}': no bootstrap group named '{b}'")
+            boot = next(x for x in groups if x["name"] == b)
+            # compose would otherwise start the bootstrap early, as a dependency.
+            if boot["startAfter"] > g["startAfter"]:
+                _fail(f"group '{g['name']}' starts before its bootstrap '{b}'")
 
     # Overrides carry a _comment key for humans; drop it.
     overrides = {
@@ -223,31 +232,77 @@ def load(path):
     return m
 
 
-def _check_seed(g, seed_ips):
-    """One seed per group: it has a fixed address and identity."""
+def _check_group(g, names):
+    """Fields every group has; defaults filled in."""
+    for key in ("name", "role", "count"):
+        if key not in g:
+            if key == "role" and g.get("kind") in ("seed", "member"):
+                # The old shape: kind meant what role means now.
+                new = "bootstrap" if g["kind"] == "seed" else "member"
+                _fail(
+                    f"group '{g.get('name')}': \"kind\": \"{g['kind']}\" is now "
+                    f"\"role\": \"{new}\"; kind now picks the node "
+                    f"({' or '.join(KINDS)})"
+                )
+            _fail(f"group is missing '{key}': {g}")
+    if g["role"] not in ROLES:
+        _fail(f"group '{g['name']}': role must be one of {', '.join(ROLES)}")
+    g.setdefault("kind", DEFAULT_KIND[g["role"]])
+    if g["kind"] not in KINDS:
+        _fail(f"group '{g['name']}': kind must be one of {', '.join(KINDS)}")
+    if g["name"] in names:
+        _fail(f"duplicate group name '{g['name']}'")
+    names.add(g["name"])
+    g.setdefault("startAfter", 0)
+    g.setdefault("jitter", 0)
+    g.setdefault("env", {})
+    # stopAfter: seconds from T0 at which the group's containers are stopped.
+    # Absent: they run on.
+    if "stopAfter" in g and g["stopAfter"] <= g["startAfter"]:
+        _fail(f"group '{g['name']}': stopAfter must come after startAfter")
+    if g["kind"] == NATIVE:
+        g.setdefault("args", [])
+        for a in g["args"]:
+            if a.split("=")[0].startswith(HARNESS_OWNED_FLAGS):
+                _fail(
+                    f"group '{g['name']}': {a.split('=')[0]} is set by the harness "
+                    "(identity, network, metrics, bootstrap); drop it from args"
+                )
+    else:
+        g.setdefault("config", "member.json.tpl")
+
+
+def _check_bootstrap(g, bootstrap_ips):
+    """One bootstrap per group: it has a fixed address and identity."""
     if g["count"] != 1:
         _fail(
-            f"seed group '{g['name']}': count must be 1 -- a seed has a fixed "
-            "ip and nodekey, so declare each seed as its own group"
+            f"bootstrap group '{g['name']}': count must be 1 -- a bootstrap has a "
+            "fixed ip and nodekey, so declare each as its own group"
         )
-    for key in ("ip", "port", "nodekey"):
+    for key in ("ip", "nodekey"):
         if key not in g:
-            _fail(f"seed group '{g['name']}' is missing '{key}'")
+            _fail(f"bootstrap group '{g['name']}' is missing '{key}'")
     if g["ip"] in RESERVED_IPS:
-        _fail(f"seed group '{g['name']}': {g['ip']} is {RESERVED_IPS[g['ip']]}'s address")
-    if g["ip"] in seed_ips:
-        _fail(f"seed groups '{seed_ips[g['ip']]}' and '{g['name']}' share {g['ip']}")
-    seed_ips[g["ip"]] = g["name"]
+        _fail(f"bootstrap group '{g['name']}': {g['ip']} is {RESERVED_IPS[g['ip']]}'s address")
+    if g["ip"] in bootstrap_ips:
+        _fail(f"bootstrap groups '{bootstrap_ips[g['ip']]}' and '{g['name']}' share {g['ip']}")
+    bootstrap_ips[g["ip"]] = g["name"]
     try:
         derived = peer_id(g["nodekey"])
     except ValueError:
-        _fail(f"seed group '{g['name']}': nodekey must be 64 hex digits of a valid key")
+        _fail(f"bootstrap group '{g['name']}': nodekey must be 64 hex digits of a valid key")
     if g.setdefault("peerId", derived) != derived:
         _fail(
-            f"seed group '{g['name']}': peerId {g['peerId']} does not belong to its "
-            f"nodekey, which gives {derived} -- drop peerId to have it derived"
+            f"bootstrap group '{g['name']}': peerId {g['peerId']} does not belong to "
+            f"its nodekey, which gives {derived} -- drop peerId to have it derived"
         )
-    g.setdefault("args", [])
+    if g["kind"] == NATIVE:
+        g.setdefault("port", NATIVE_BOOTSTRAP_PORT)
+    elif "port" in g:
+        _fail(
+            f"bootstrap group '{g['name']}': a {MODULE_NODE} bootstrap is reached on "
+            f"libp2p_module's port {MODULE_P2P_PORT}; drop 'port'"
+        )
 
 
 def module_flake(m):
@@ -259,6 +314,14 @@ def module_flake(m):
     return f"{mod['flake']}{sep}ref={mod['ref']}"
 
 
-def seed_addr(g):
-    """The /p2p/ multiaddr of a seed group."""
-    return f"/ip4/{g['ip']}/tcp/{g['port']}/p2p/{g['peerId']}"
+def bootstrap_addr(g):
+    """The /p2p/ multiaddr a peer bootstraps from: the node's own address for a
+    native bootstrap, its libp2p_module's (same key, derived) for a module one."""
+    port = g["port"] if g["kind"] == NATIVE else MODULE_P2P_PORT
+    return f"/ip4/{g['ip']}/tcp/{port}/p2p/{g['peerId']}"
+
+
+def libp2p_privkey(g):
+    """The nodekey as libp2p_module's privKey: a protobuf PrivateKey, type 2 =
+    secp256k1, 32 bytes. Gives the module node the DHT identity peer_id() names."""
+    return "08021220" + g["nodekey"].lower()

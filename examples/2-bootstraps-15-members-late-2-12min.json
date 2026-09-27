@@ -1,10 +1,11 @@
 {
   "_comment": [
-    "2 seeds, 15 members at T0 split between them, one late joiner at T0+2min",
-    "and another at T0+12min. seed2 joins seed1's DHT on its own (the harness adds",
-    "--kad-bootstrap-node); each member bootstraps from one seed, round-robin.",
-    "A seed's peerId is derived from its nodekey.",
-    "Run: HARNESS_MANIFEST=examples/2-seeds-15-members-late-2-12min.json ./harness.sh run 1800"
+    "2 bootstraps (both logosdeliverynode), 15 members at T0 split between them,",
+    "one late joiner at T0+2min and another at T0+12min. bootstrap2 joins",
+    "bootstrap1's DHT on its own (the harness adds the bootstrap flag); each member",
+    "joins through one bootstrap, round-robin. A bootstrap's peerId is derived from",
+    "its nodekey.",
+    "Run: HARNESS_MANIFEST=examples/2-bootstraps-15-members-late-2-12min.json ./harness.sh run 1800"
   ],
   "module": {
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
@@ -23,12 +24,12 @@
   },
   "groups": [
     {
-      "name": "seed1",
-      "kind": "seed",
+      "name": "bootstrap1",
+      "role": "bootstrap",
+      "kind": "logosdeliverynode",
       "count": 1,
       "startAfter": 0,
       "ip": "10.0.0.10",
-      "port": 44001,
       "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
       "args": [
         "--entry-layer=kernel",
@@ -39,9 +40,6 @@
         "--rendezvous=false",
         "--dns-discovery=false",
         "--rest=false",
-        "--metrics-server=true",
-        "--metrics-server-address=0.0.0.0",
-        "--metrics-server-port=8008",
         "--metrics-logging=false",
         "--kad-service-lookup-interval=15",
         "--max-pure-libp2p-peers=200",
@@ -49,12 +47,12 @@
       ]
     },
     {
-      "name": "seed2",
-      "kind": "seed",
+      "name": "bootstrap2",
+      "role": "bootstrap",
+      "kind": "logosdeliverynode",
       "count": 1,
       "startAfter": 0,
       "ip": "10.0.0.20",
-      "port": 44001,
       "nodekey": "8888888888888888888888888888888888888888888888888888888888888888",
       "args": [
         "--entry-layer=kernel",
@@ -65,9 +63,6 @@
         "--rendezvous=false",
         "--dns-discovery=false",
         "--rest=false",
-        "--metrics-server=true",
-        "--metrics-server-address=0.0.0.0",
-        "--metrics-server-port=8008",
         "--metrics-logging=false",
         "--kad-service-lookup-interval=15",
         "--max-pure-libp2p-peers=200",
@@ -76,7 +71,8 @@
     },
     {
       "name": "members",
-      "kind": "member",
+      "role": "member",
+      "kind": "delivery-module",
       "count": 15,
       "startAfter": 0,
       "jitter": 8,
@@ -87,7 +83,8 @@
     },
     {
       "name": "late-2min",
-      "kind": "member",
+      "role": "member",
+      "kind": "delivery-module",
       "count": 1,
       "startAfter": 120,
       "jitter": 0,
@@ -98,7 +95,8 @@
     },
     {
       "name": "late-12min",
-      "kind": "member",
+      "role": "member",
+      "kind": "delivery-module",
       "count": 1,
       "startAfter": 720,
       "jitter": 0,

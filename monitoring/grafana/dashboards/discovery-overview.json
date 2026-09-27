@@ -35,7 +35,7 @@
     {
       "type": "stat",
       "title": "Nodes up",
-      "description": "Targets answering /metrics: the seed plus every member.",
+      "description": "Targets answering /metrics: every bootstrap and every member.",
       "datasource": {
         "type": "prometheus",
         "uid": "sim-prom"
@@ -1007,8 +1007,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Seed: peers admitted (pure libp2p)",
-      "description": "Members reach the seed as plain libp2p peers; it admits them against its --max-pure-libp2p-peers budget.",
+      "title": "Bootstraps: peers admitted (pure libp2p)",
+      "description": "Module members reach a bootstrap as plain libp2p peers; it admits them against its --max-pure-libp2p-peers budget.",
       "datasource": {
         "type": "prometheus",
         "uid": "sim-prom"
@@ -1016,8 +1016,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(logos_delivery_pure_libp2p_peers{role=\"seed\"})",
-          "legendFormat": "connected",
+          "expr": "max by (node) (logos_delivery_pure_libp2p_peers{role=\"bootstrap\"})",
+          "legendFormat": "{{node}} connected",
           "editorMode": "code",
           "datasource": {
             "type": "prometheus",
@@ -1028,8 +1028,8 @@
         },
         {
           "refId": "B",
-          "expr": "max(logos_delivery_peer_store_size{role=\"seed\"})",
-          "legendFormat": "peer store",
+          "expr": "max by (node) (logos_delivery_peer_store_size{role=\"bootstrap\"})",
+          "legendFormat": "{{node}} peer store",
           "editorMode": "code",
           "datasource": {
             "type": "prometheus",

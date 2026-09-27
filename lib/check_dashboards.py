@@ -13,12 +13,10 @@ import json, subprocess, sys, glob, os
 here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def q(expr):
-    out = subprocess.run(
-        ["docker", "run", "--rm", "--network", "logos-sim_sim",
-         "curlimages/curl:8.11.1", "-s", "--max-time", "8",
-         "--data-urlencode", f"query={expr}",
-         "http://10.0.0.11:9090/api/v1/query"],
-        capture_output=True, text=True).stdout
+    # promq.sh finds the running Prometheus and its network; the compose
+    # project -- and so the network name -- follows the checkout's directory.
+    out = subprocess.run([os.path.join(here, "promq.sh"), expr],
+                         capture_output=True, text=True).stdout
     try:
         d = json.loads(out)
     except Exception:

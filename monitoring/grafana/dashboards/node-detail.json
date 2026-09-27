@@ -35,8 +35,8 @@
         "includeAll": false,
         "multi": false,
         "current": {
-          "text": "seed",
-          "value": "seed"
+          "text": "bootstrap",
+          "value": "bootstrap"
         }
       }
     ]

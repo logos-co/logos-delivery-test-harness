@@ -6,8 +6,9 @@ shapes are regular enough that a few helpers cover every panel, and the two
 dashboards stay in sync when a query changes.
 
 Metric shapes worth knowing (see README):
-  * the seed is one process: its series carry no `module` label;
-  * a member is scraped through its openmetrics module, which labels every
+  * a logosdeliverynode is one process: its series carry no `module` label
+    (Prometheus relabels it `in-process`);
+  * a delivery-module node is scraped through its openmetrics module, which labels every
     series with the module it came from — `libp2p_module` holds the kademlia
     and service-discovery registries (`kad_*`, `cd_*`), `delivery_module`
     holds the delivery library's own registry (`logos_delivery_*`) plus a
@@ -18,7 +19,8 @@ is 0), and `sum by (node) (rate(...))` does the same for counters.
 import json, os
 
 DS = {"type": "prometheus", "uid": "sim-prom"}
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grafana", "dashboards")
+OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "monitoring", "grafana", "dashboards")
 
 # ---------------------------------------------------------------- helpers --
 
@@ -197,7 +199,7 @@ EXPECTED = 'scalar(count(up{job="sim-nodes"} == 1))'
 o = Layout()
 o.row("Fleet")
 o.add(stat("Nodes up", 'count(up{job="sim-nodes"} == 1)',
-           desc="Targets answering /metrics: the seed plus every member."), 3, 4)
+           desc="Targets answering /metrics: every bootstrap and every member."), 3, 4)
 o.add(stat("Members up", 'count(up{job="sim-nodes", role="member"} == 1)'), 3, 4)
 o.add(stat("Discovery coverage (median)",
            f'quantile(0.5, max by (node) (cd_service_table_peers)) / {EXPECTED} '
@@ -262,11 +264,11 @@ o.add(ts("Service-discovery bytes (fleet)",
          unit="Bps", w=8, h=7), 8, 7)
 
 o.row("Peering")
-o.add(ts("Seed: peers admitted (pure libp2p)",
-         [('max(logos_delivery_pure_libp2p_peers{role="seed"})', "connected"),
-          ('max(logos_delivery_peer_store_size{role="seed"})', "peer store")],
-         desc="Members reach the seed as plain libp2p peers; it admits them "
-              "against its --max-pure-libp2p-peers budget.", w=8, h=7), 8, 7)
+o.add(ts("Bootstraps: peers admitted (pure libp2p)",
+         [('max by (node) (logos_delivery_pure_libp2p_peers{role="bootstrap"})', "{{node}} connected"),
+          ('max by (node) (logos_delivery_peer_store_size{role="bootstrap"})', "{{node}} peer store")],
+         desc="Module members reach a bootstrap as plain libp2p peers; it admits "
+              "them against its --max-pure-libp2p-peers budget.", w=8, h=7), 8, 7)
 o.add(ts("libp2p peers, per node",
          [('max by (node) (libp2p_peers)', "{{node}}")],
          w=8, h=7), 8, 7)
@@ -340,10 +342,11 @@ overview = dashboard(
 
 # ------------------------------------------------------------ node detail --
 
-# The seed is one process and carries both registries under `module=in-process`;
-# a member is two, labelled by the module the series came from. Selecting with
-# these keeps each panel to the process that actually owns the metric, and the
-# seed still appears in both halves, which is the truth for it.
+# A logosdeliverynode is one process and carries both registries under
+# `module=in-process`; a delivery-module node is two, labelled by the module the
+# series came from. Selecting with these keeps each panel to the process that
+# actually owns the metric, and a native node still appears in both halves,
+# which is the truth for it.
 DELIVERY = '{node="$node", module=~"delivery_module|in-process"}'
 LIBP2P = '{node="$node", module=~"libp2p_module|in-process"}'
 
@@ -353,7 +356,7 @@ node_var = {
     "query": {"query": 'label_values(up{job="sim-nodes"}, node)', "refId": "A"},
     "definition": 'label_values(up{job="sim-nodes"}, node)',
     "refresh": 2, "sort": 1, "includeAll": False, "multi": False,
-    "current": {"text": "seed", "value": "seed"},
+    "current": {"text": "bootstrap", "value": "bootstrap"},
 }
 
 n.row("Node")

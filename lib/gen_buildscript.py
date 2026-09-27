@@ -39,11 +39,11 @@ def generate(resolved, out_path):
     def delivery_override():
         """Carry a chosen logos-delivery into the module's own build.
 
-        The seed is built straight from logos-delivery, but delivery_module --
-        what the members run -- is compiled inside the module's build against
+        logosdeliverynode is built straight from logos-delivery, but delivery_module --
+        what delivery-module nodes run -- is compiled inside the module's build against
         the module's `logos-delivery` input. Two separate nix invocations, so
-        without this a chosen delivery would move the seed and leave the
-        members on whatever the module pins: a fleet built from two different
+        without this a chosen delivery would move the native nodes and leave the
+        module nodes on whatever the module pins: a fleet built from two different
         deliveries, silently. Nothing is passed when delivery comes from the
         module's lock, which is the default -- then they already agree.
         """

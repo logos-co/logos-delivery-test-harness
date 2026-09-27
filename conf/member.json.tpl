@@ -4,7 +4,7 @@
     "cluster-id": @CLUSTER@,
     "num-shards-in-network": @SHARDS@,
     "plugin-kad-discovery": true,
-    "kad-bootstrap-node": ["@SEED@"],
+    "kad-bootstrap-node": [@BOOTSTRAPS@],
     "kad-service-lookup-interval": @LOOKUP@,
     "discv5-discovery": false,
     "tcp-port": @TCP_PORT@,
