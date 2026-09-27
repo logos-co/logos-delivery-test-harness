@@ -11,23 +11,21 @@
       "  DELIVERY_MODULE_REF=<branch|tag|full-sha>  DELIVERY_MODULE_REV=<full-sha>",
       "and likewise DELIVERY_*, LIBP2P_MODULE_*, OPENMETRICS_MODULE_*,",
       "LOGOSCORE_CLI_* for the dependencies this module otherwise chooses.",
-      "master does not carry the plugin-hosted discovery work, and a node built",
-      "from it rejects the seed args and member config below, so the default is",
-      "the branch that does."
+      "A branch is not a pin: out/resolved.json records the commit it resolved to."
     ],
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
-    "ref": "poc-apply-discovery-plugin-with-dep"
+    "ref": "master"
   },
 
   "overrides": {
     "_comment": [
       "Only what the chosen module ref cannot supply, or what we deliberately",
-      "differ on. This branch pins libp2p_module and openmetrics-module at the",
-      "revisions the harness would have chosen anyway, so both are derived.",
-      "logos-logoscore-cli is the one standing disagreement: the branch locks",
-      "454e0696, the harness has always run 665ac28b. Drop this entry to follow",
-      "the module. A ref that pins none of them (master) needs all three back,",
-      "each with a full `flake` reference -- `harness.sh resolve` says which."
+      "differ on. master pins libp2p_module, openmetrics-module and",
+      "logos-delivery in its flake lock, so those are derived.",
+      "logos-logoscore-cli is not the module's own input: its lock only carries",
+      "copies pulled in by other inputs (libp2p_module, logos-test-modules), and",
+      "its docker-compose runs yet another. The harness keeps running 665ac28b,",
+      "the version every recorded run used. `harness.sh resolve` shows each source."
     ],
     "logos-logoscore-cli": {
       "flake": "github:logos-co/logos-logoscore-cli",

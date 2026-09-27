@@ -7,7 +7,7 @@
 
   "module": {
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
-    "ref": "poc-apply-discovery-plugin-with-dep"
+    "ref": "master"
   },
 
   "overrides": {
