@@ -1,7 +1,12 @@
 # logos-delivery-test-harness
 
-A container fleet for exercising logos-delivery: a seed, any number
-of plugin-hosted member nodes, Prometheus and provisioned Grafana dashboards.
+A container fleet for exercising logos-delivery: one or more seeds, any number
+of plugin-hosted member nodes joining and leaving on a schedule, Prometheus and
+provisioned Grafana dashboards.
+
+Driving it from an agent (Claude Code, Codex, ...)? [AGENTS.md](AGENTS.md) is the
+operating manual, and [Prompt examples](#prompt-examples) below shows requests it
+turns into runs.
 
 Everything is built by nix from named git revisions, so a manifest plus the
 generated `out/resolved.json` reproduces an image exactly.
@@ -15,13 +20,15 @@ builder container, whose store persists in the `logos-harness-nix` volume.
 
 ```bash
 ./harness.sh build          # resolve, nix-build every component, build logos-sim:local
-./harness.sh up             # launch the groups on their schedule
+./harness.sh up             # launch the groups on their schedule, leave the stack up
 open http://localhost:3000    # Grafana (anonymous admin)
 ./harness.sh down -v
+
+./harness.sh run 900        # or: up, 15 min from T0, collect into out/collect/<stamp>, down
 ```
 
-`HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness.sh up` runs the
-37-node late-joiner topology instead of the small default.
+`HARNESS_MANIFEST=examples/37-node-late-joiners.json ./harness.sh run 1500` runs
+the 37-node late-joiner topology instead of the small default.
 
 ## The manifest
 
@@ -31,11 +38,11 @@ flake lock, so the harness always builds a coherent set:
 
 | Component | Where its revision comes from |
 |---|---|
-| `logos-delivery-module` | `module.ref` in the manifest (branch, tag or `rev`) |
-| `logos-delivery` (the seed binary) | the module's lock, on every ref |
-| `libp2p_module` | the module's lock **where the ref pins it**, else `overrides` |
-| `openmetrics-module` | as above |
-| `logos-logoscore-cli` | as above |
+| `logos-delivery-module` | `module.ref` in the manifest — `master` by default (branch, tag or `rev`) |
+| `logos-delivery` (the seed binary, and what delivery_module is built against) | the module's lock |
+| `libp2p_module` | the module's lock |
+| `openmetrics-module` | the module's lock |
+| `logos-logoscore-cli` | `overrides` — see [Overrides](#overrides) |
 
 ### Choosing revisions from the environment
 
@@ -57,7 +64,7 @@ DELIVERY_MODULE_REV=ae967a12…78b9b321d     ./harness.sh build   # commit, expl
 DELIVERY_MODULE_FLAKE=git+https://…/my-fork ./harness.sh build  # another repo
 
 # Pin one dependency away from what the module chose, leaving the rest derived
-DELIVERY_REF=poc-discovery-plugin-9        ./harness.sh build
+DELIVERY_REF=my-fix-branch                 ./harness.sh build
 LIBP2P_MODULE_REV=ec7b8f58…239661805d      ./harness.sh build
 ```
 
@@ -94,13 +101,15 @@ there is nothing to propagate.
 
 ### Overrides
 
-**What a ref pins differs by ref.** The default branch pins four of the five, so
-only one override ships — `logos-logoscore-cli`, which is a standing decision
-rather than a gap: the module locks `454e0696` while the harness has always run
-`665ac28b`. Drop the entry to follow the module.
+`master` pins `logos-delivery`, `libp2p_module` and `openmetrics-module` in its
+flake lock, so only one override ships — `logos-logoscore-cli`. That one is not a
+gap to fill but a choice: the CLI is not an input of the module itself, its lock
+only carries copies pulled in by other inputs (via `libp2p_module` and
+`logos-test-modules`, at different revisions), and its docker-compose runs a third.
+The harness stays on `665ac28b`, the version every recorded run used.
 
-`master`, by contrast, pins only `logos-delivery`, so building from it needs the
-other three supplied here, each with a full `flake` reference:
+A ref that does not pin a component needs it supplied here, with a full `flake`
+reference:
 
 ```json
 "overrides": {
@@ -115,18 +124,21 @@ carrying only `rev` swaps the revision of a component the module does pin.
 `override` or `manifest`, so what is derived and what is imposed is visible
 before anything is built.
 
-> A node built from `master` rejects the seed arguments and member config in the
-> shipped manifest: the discovery flags it uses (`--enable-kad-discovery`,
-> `--max-pure-libp2p-peers`, `plugin-kad-discovery`) exist only on the branches
-> carrying the plugin-discovery work. Change both together, or neither.
+> The shipped seed arguments and member profile use the plugin-discovery flags
+> (`--enable-kad-discovery`, `--max-pure-libp2p-peers`, `plugin-kad-discovery`).
+> A module ref from before that work landed rejects them; change both together.
 
 ### Groups
 
-A group is *n nodes sharing one profile, launched at one offset*:
+A group is *n nodes sharing one profile, launched at one offset and optionally
+stopped at another*:
 
 ```json
 { "name": "late-5min", "kind": "member", "count": 1,
   "startAfter": 300, "jitter": 0, "config": "member.json.tpl" }
+
+{ "name": "leavers", "kind": "member", "count": 3,
+  "startAfter": 0, "stopAfter": 600, "jitter": 8 }
 ```
 
 - `kind` — `seed` (native `logosdeliverynode`, in-process kademlia) or `member`
@@ -135,6 +147,14 @@ A group is *n nodes sharing one profile, launched at one offset*:
   live in `conf/` and are rendered per node (`@IP@`, `@SEED@`, `@LOOKUP@`,
   `@CLUSTER@`, `@SHARDS@`, `@TCP_PORT@`).
 - `startAfter` — seconds from T0, where T0 is when the offset-0 groups launch.
+- `stopAfter` — seconds from T0 at which the group's containers are stopped
+  with `docker compose stop`. A member's entrypoint passes the SIGTERM to the
+  logoscore daemon, which stops its modules and exits; a seed gets it directly.
+  Anything still running 10 s later is killed. Must be later than `startAfter`. Stops apply to a whole group, so peers meant to leave get a group
+  of their own. A stopped container keeps its logs and trace for `collect`.
+- `seeds` (members only) — the seed groups this group bootstraps from, handed
+  out round-robin across the fleet. Default: every seed group. Each member gets
+  one bootstrap peer, because the plugin passes libp2p only the first.
 - `jitter` — random 0..n second spread within the group. N daemons loading
   plugins at the same instant trip logos-core's 10 s plugin-load timeout.
 - `env` — extra environment for the group's containers. The rest of a member's
@@ -143,6 +163,21 @@ A group is *n nodes sharing one profile, launched at one offset*:
   profile), `MESH_CONTENT_TOPIC` (what the member subscribes to, default
   `/sim/1/mesh/proto`), `P2P_MAX_CONNS` (the plugin host's connection limits,
   default 100), `LD_DISCO_TRACE` (where the plugin writes its trace).
+
+A **seed** group holds exactly one seed, the native `logosdeliverynode`:
+
+```json
+{ "name": "seed2", "kind": "seed", "count": 1, "ip": "10.0.0.20", "port": 44001,
+  "nodekey": "8888888888888888888888888888888888888888888888888888888888888888",
+  "args": ["--entry-layer=kernel", "--relay=true", "--enable-kad-discovery=true", "..."] }
+```
+
+- `ip` — a fixed address; `10.0.0.11` and `10.0.0.12` are Prometheus and Grafana.
+- `nodekey` — 64 hex digits of a secp256k1 key. `peerId` is derived from it; one
+  that is given anyway must match.
+- `args` — the seed's command line after the identity flags. Copy the first seed's.
+- Every seed after the first gets `--kad-bootstrap-node=<first seed>` added, so all
+  seeds share one DHT rather than each forming its own network.
 
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
@@ -160,9 +195,11 @@ registration.
 | `harness.sh resolve` | read the module's flake lock, write `out/resolved.json` |
 | `harness.sh build [--no-image]` | resolve, nix-build every component, build the image |
 | `harness.sh gen` | write `out/compose.groups.yml`, `out/prom-targets.json`, `out/plan.json` |
-| `harness.sh up` | gen, start monitoring, launch each group at its offset, log to `out/run.log` |
+| `harness.sh up` | gen, start monitoring, launch each group at its `startAfter` and stop it at its `stopAfter`, log to `out/run.log`; returns when the schedule is done and leaves the stack up |
+| `harness.sh run <sec> [dir]` | `up`, wait until T0 + `sec`, `collect` into `dir` (default `out/collect/<utc-stamp>`), `down -v`. Launches or stops scheduled at or after the end are dropped, with a warning |
+| `harness.sh collect [dir]` | snapshot a running stack: stage log, container states, traces, plan and pins, `up` and peers-per-shard metrics, report, and the logs of the seeds and of any member with an error, a failed stage or a stopped container (`COLLECT_LOGS=all` keeps every log) |
 | `harness.sh down [-v]` | tear down |
-| `harness.sh report` | discovery report over the traces in `out/traces` |
+| `harness.sh report [dir] [n]` | discovery report over a trace dir (default `out/traces`); `n` nodes expected in the DHT, default from the plan |
 
 `harness.sh` with no command prints all of this, including the revision
 prefixes, which it reads from `lib/manifest.py` so the help cannot drift.
@@ -212,5 +249,54 @@ out/                 gitignored: build artefacts, generated compose, traces, run
 ## Provenance
 
 `out/resolved.json` records the exact flake reference used for every component,
-and `out/run.log` records T0 and each group's actual launch time. Keep both
-alongside any measurements taken from a run.
+and `out/run.log` records T0 and each group's actual launch and stop time. `run`
+and `collect` copy both into the collect directory, next to the measurements.
+
+## Prompt examples
+
+Requests an agent working in this repo can turn into a run (see
+[AGENTS.md](AGENTS.md) for how). Each is a manifest plus one command.
+
+**"Run a 30 min test with 2 seeds and 15 startup joiners, after 2 min add another
+member, after 12 min add another."** — exactly
+[`examples/2-seeds-15-members-late-2-12min.json`](examples/2-seeds-15-members-late-2-12min.json):
+
+```bash
+HARNESS_MANIFEST=examples/2-seeds-15-members-late-2-12min.json \
+  ./harness.sh run 1800 out/collect/2seeds-30min
+```
+
+**"Same, but 3 of the startup members leave after 10 minutes."** — split them into
+their own group with a stop time:
+
+```json
+{ "name": "members", "kind": "member", "count": 12, "startAfter": 0, "jitter": 8 },
+{ "name": "leave-10min", "kind": "member", "count": 3, "startAfter": 0, "stopAfter": 600, "jitter": 8 }
+```
+
+**"Stop the second seed at 5 minutes and see whether its members stay discoverable."**
+— `"stopAfter": 300` on `seed2`. Its members keep running.
+
+**"Put the late joiners on seed2 only."** — `"seeds": ["seed2"]` on those groups.
+
+**"Rerun the 37-node test on delivery PR #1234 for 25 minutes."** — take the PR's
+head commit (`gh pr view 1234 --repo logos-messaging/logos-delivery --json headRefOid`)
+and override delivery, which moves the seed and the members together:
+
+```bash
+DELIVERY_REF=<full sha> HARNESS_MANIFEST=examples/37-node-late-2-12min.json \
+  ./harness.sh build
+DELIVERY_REF=<full sha> HARNESS_MANIFEST=examples/37-node-late-2-12min.json \
+  ./harness.sh run 1500 out/collect/pr1234
+```
+
+**"A 10 minute smoke on logos-delivery-module commit X."** — the default manifest
+(1 seed, 3 members):
+
+```bash
+DELIVERY_MODULE_REF=<full sha> ./harness.sh build
+DELIVERY_MODULE_REF=<full sha> ./harness.sh run 600
+```
+
+**"Did anyone lose libp2p?"** — after a run, `grep 'module lost' <dir>/stages.txt`;
+`collect` kept that member's log.
