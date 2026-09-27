@@ -38,6 +38,12 @@ fi
 log "daemon starting (profile $MEMBER_CONFIG, ip $IP, libp2p tcp $P2P_PORT, seed $SEED_ADDR)"
 logoscore daemon -m /opt/modules --persistence-path /data &
 DAEMON=$!
+WATCHDOG=
+# A scheduled stop (stopAfter) is `docker stop`: SIGTERM to this script, PID 1.
+# bash ignores it while waiting, so the member would be SIGKILLed 10 s later.
+# Hand it to the daemon, which stops its modules and exits -- after silencing
+# the watchdog, which would otherwise report the unloading modules as lost.
+trap 'log "stopping (SIGTERM)"; [ -n "$WATCHDOG" ] && kill $WATCHDOG; kill -TERM $DAEMON' TERM
 
 n=0
 until logoscore list-modules >/dev/null 2>&1; do
@@ -129,5 +135,8 @@ watch_modules() {
   done
 }
 watch_modules &
+WATCHDOG=$!
 
 wait $DAEMON
+# A SIGTERM interrupts the first wait; let the daemon finish shutting down.
+wait $DAEMON 2>/dev/null

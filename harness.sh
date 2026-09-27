@@ -6,6 +6,8 @@
 #   harness.sh build [--no-image] resolve, nix-build every component, build the image
 #   harness.sh gen                generate compose services, Prometheus targets, plan
 #   harness.sh up                 gen, then launch each group at its startAfter offset
+#                                 and stop it at its stopAfter; blocks until done
+#   harness.sh run <sec> [dir]    up, run for <sec> from T0, collect into dir, down
 #   harness.sh down [-v]          tear the stack down
 #   harness.sh report [dir] [n]   discovery report over a trace dir (default out/traces),
 #                                 n = nodes expected in the DHT (default: from the plan)
@@ -109,31 +111,74 @@ import json;print(json.load(open('$out/resolved.json'))['module'])")"
   runlog "starting monitoring"
   dc up -d prometheus grafana >/dev/null
 
-  # Groups at offset 0 go first; the seed among them gates the rest, because a
-  # member cannot bootstrap before it answers.
-  local zero
+  # Groups at offset 0 go first; the seeds among them gate the rest, because a
+  # member cannot bootstrap before its seed answers.
+  local zero t0
   zero=$($PY -c "
 import json
 plan=json.load(open('$out/plan.json'))
 print(' '.join(s for g in plan if g['startAfter']==0 for s in g['services']))")
   runlog "T0 -- launching: $zero"
-  local t0
   t0=$(date +%s)
+  echo "$t0" > "$out/t0"
   dc up -d $zero >/dev/null
 
-  # Every later group, at its own offset from T0.
+  # Every later launch and every stop, in time order. --no-deps: a seed that
+  # was stopped on schedule must stay stopped when a late member arrives.
+  # `run` ends the schedule early by creating out/abort.
   $PY -c "
 import json
 plan=json.load(open('$out/plan.json'))
-for g in sorted(plan, key=lambda g: g['startAfter']):
-    if g['startAfter'] > 0:
-        print(g['startAfter'], g['name'], ' '.join(g['services']))" |
-    while read -r after name services; do
-      while [ $(($(date +%s) - t0)) -lt "$after" ]; do sleep 1; done
-      runlog "T0+$(($(date +%s) - t0))s -- launching $name: $services"
-      dc up -d $services >/dev/null
+ev=[(g['startAfter'],1,'launching',g) for g in plan if g['startAfter']>0]
+ev+=[(g['stopAfter'],0,'stopping',g) for g in plan if 'stopAfter' in g]
+for at,_,what,g in sorted(ev, key=lambda e: e[:2]):
+    print(at, what, g['name'], ' '.join(g['services']))" |
+    while read -r at what name services; do
+      while [ $(($(date +%s) - t0)) -lt "$at" ]; do
+        [ -e "$out/abort" ] && break 2
+        sleep 1
+      done
+      runlog "T0+$(($(date +%s) - t0))s -- $what $name: $services"
+      if [ "$what" = launching ]; then
+        dc up -d --no-deps $services >/dev/null
+      else
+        dc stop $services >/dev/null 2>&1
+      fi
     done
-  runlog "all groups launched"
+  if [ -e "$out/abort" ]; then
+    runlog "schedule cut short by the end of the run"
+  else
+    runlog "schedule complete"
+  fi
+}
+
+cmd_run() {
+  # up, wait until T0 + <seconds>, collect, down. Launches or stops scheduled
+  # after the end of the run are dropped, and said so.
+  local duration=${1:-} dir=${2:-} up t0 late
+  case "$duration" in ''|*[!0-9]*) echo "usage: harness.sh run <seconds> [collect-dir]" >&2; exit 1 ;; esac
+  rm -f "$out/t0" "$out/abort"
+  cmd_gen >/dev/null
+  late=$($PY -c "
+import json
+plan=json.load(open('$out/plan.json'))
+print(' '.join(f\"{g['name']}@{t}s\" for g in plan for t in (g['startAfter'], g.get('stopAfter', 0)) if t >= $duration))")
+  [ -n "$late" ] && log "warning: scheduled at or after the ${duration}s end, so dropped: $late"
+
+  cmd_up & up=$!
+  until [ -s "$out/t0" ]; do
+    kill -0 $up 2>/dev/null || { log "up failed before T0"; return 1; }
+    sleep 1
+  done
+  t0=$(cat "$out/t0")
+  while [ $(($(date +%s) - t0)) -lt "$duration" ]; do sleep 5; done
+  touch "$out/abort"
+  wait $up
+  rm -f "$out/abort"
+  log "T0+$(($(date +%s) - t0))s -- end of run"
+  cmd_collect "$dir"
+  cmd_down -v >/dev/null 2>&1
+  log "stack down"
 }
 
 cmd_down() { cmd_gen >/dev/null; dc down "$@"; }
@@ -157,13 +202,15 @@ cmd_collect() {
   "$here/promq.sh" logos_delivery_connected_peers_per_shard > "$dir/q_peers.json" 2>&1 || true
 
   # A container log is a few MB, so by default keep only those with something to
-  # explain: the seed, and a member whose trace carries an error, whose stage log
+  # explain: the seeds, and a member whose trace carries an error, whose stage log
   # says FAILED, REFUSED or lost, or whose container is no longer running.
   if [ "${COLLECT_LOGS:-flagged}" = all ]; then
     keep=$(dc ps -a --format '{{.Service}}')
   else
     keep=$({
-      echo seed
+      $PY -c "
+import json
+print('\\n'.join(s for g in json.load(open('$out/plan.json')) if g['kind']=='seed' for s in g['services']))"
       grep -lE 'ERR|UNAVAILABLE|timeout|FAILED' "$out"/traces/*.trace 2>/dev/null |
         sed 's|.*/||; s|\.trace$||'
       sed -nE 's/^\[harness ([^]]+)\] .*(FAILED|REFUSED|module lost).*/\1/p' "$dir/stages.txt"
@@ -183,5 +230,6 @@ case "${1:-}" in
   down)    shift; cmd_down "$@" ;;
   report)  shift; cmd_report "$@" ;;
   collect) shift; cmd_collect "$@" ;;
+  run)     shift; cmd_run "$@" ;;
   *) usage; exit 1 ;;
 esac

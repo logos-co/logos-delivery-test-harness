@@ -31,7 +31,18 @@ ENV_PREFIX = {
     "logos-logoscore-cli": "LOGOSCORE_CLI",
 }
 
-INFRA_HOSTS = 256  # first addresses of the subnet: seed, prometheus, grafana
+INFRA_HOSTS = 256  # first addresses of the subnet: seeds, prometheus, grafana
+# Fixed in docker-compose.yml; a seed placed here would collide.
+RESERVED_IPS = {"10.0.0.11": "prometheus", "10.0.0.12": "grafana"}
+
+# secp256k1, for deriving a seed's peer id from its nodekey.
+_P = 2**256 - 2**32 - 977
+_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_G = (
+    0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+    0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8,
+)
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
 def _fail(msg):
@@ -80,6 +91,51 @@ def _apply_pin(target, pin):
         target.pop("rev", None)
 
 
+def _point_add(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a[0] == b[0] and (a[1] + b[1]) % _P == 0:
+        return None
+    if a == b:
+        slope = 3 * a[0] * a[0] * pow(2 * a[1], -1, _P)
+    else:
+        slope = (b[1] - a[1]) * pow(b[0] - a[0], -1, _P)
+    slope %= _P
+    x = (slope * slope - a[0] - b[0]) % _P
+    return (x, (slope * (a[0] - x) - a[1]) % _P)
+
+
+def peer_id(nodekey):
+    """The libp2p peer id of a secp256k1 private key given as 64 hex digits.
+
+    Identity multihash over the protobuf PublicKey (type 2 = secp256k1, the
+    33-byte compressed point), base58btc -- what logosdeliverynode --nodekey
+    turns into. Lets a seed be declared by its key alone.
+    """
+    if len(nodekey) != 64:
+        raise ValueError("nodekey must be 64 hex digits")
+    k = int(nodekey, 16)
+    if not 0 < k < _N:
+        raise ValueError("nodekey out of range")
+    point, acc = _G, None
+    while k:
+        if k & 1:
+            acc = _point_add(acc, point)
+        point = _point_add(point, point)
+        k >>= 1
+    x, y = acc
+    pub = bytes([2 + (y & 1)]) + x.to_bytes(32, "big")
+    proto = bytes([0x08, 0x02, 0x12, len(pub)]) + pub
+    raw = bytes([0x00, len(proto)]) + proto
+    n, out = int.from_bytes(raw, "big"), ""
+    while n:
+        n, r = divmod(n, 58)
+        out = _B58[r] + out
+    return "1" * (len(raw) - len(raw.lstrip(b"\0"))) + out
+
+
 def load(path):
     if not os.path.exists(path):
         _fail(f"no manifest at {path}")
@@ -108,6 +164,7 @@ def load(path):
         _fail("manifest.groups is empty")
 
     names = set()
+    seed_ips = {}
     for g in groups:
         for key in ("name", "kind", "count"):
             if key not in g:
@@ -120,13 +177,32 @@ def load(path):
         g.setdefault("startAfter", 0)
         g.setdefault("jitter", 0)
         g.setdefault("env", {})
+        # stopAfter: seconds from T0 at which the group's containers are
+        # stopped (SIGTERM, then compose's 10 s grace). Absent: they run on.
+        if "stopAfter" in g and g["stopAfter"] <= g["startAfter"]:
+            _fail(f"group '{g['name']}': stopAfter must come after startAfter")
         if g["kind"] == "member":
             g.setdefault("config", "member.json.tpl")
         else:
-            for key in ("ip", "port", "peerId", "nodekey"):
-                if key not in g:
-                    _fail(f"seed group '{g['name']}' is missing '{key}'")
-            g.setdefault("args", [])
+            _check_seed(g, seed_ips)
+
+    seeds = [g["name"] for g in groups if g["kind"] == "seed"]
+    for g in groups:
+        if g["kind"] != "member":
+            continue
+        # The seeds this group's members bootstrap from, handed out round-robin.
+        # A member takes a single bootstrap peer: the plugin passes libp2p only
+        # the first (see run-node.md, "Plugin-hosted discovery").
+        g.setdefault("seeds", seeds)
+        for s in g["seeds"]:
+            if s not in seeds:
+                _fail(f"group '{g['name']}': no seed group named '{s}'")
+            seed = next(x for x in groups if x["name"] == s)
+            # compose would otherwise start the seed early, as a dependency.
+            if seed["startAfter"] > g["startAfter"]:
+                _fail(f"group '{g['name']}' starts before its seed '{s}'")
+        if not g["seeds"]:
+            _fail(f"group '{g['name']}': members need a seed group to bootstrap from")
 
     # Overrides carry a _comment key for humans; drop it.
     overrides = {
@@ -147,6 +223,33 @@ def load(path):
     return m
 
 
+def _check_seed(g, seed_ips):
+    """One seed per group: it has a fixed address and identity."""
+    if g["count"] != 1:
+        _fail(
+            f"seed group '{g['name']}': count must be 1 -- a seed has a fixed "
+            "ip and nodekey, so declare each seed as its own group"
+        )
+    for key in ("ip", "port", "nodekey"):
+        if key not in g:
+            _fail(f"seed group '{g['name']}' is missing '{key}'")
+    if g["ip"] in RESERVED_IPS:
+        _fail(f"seed group '{g['name']}': {g['ip']} is {RESERVED_IPS[g['ip']]}'s address")
+    if g["ip"] in seed_ips:
+        _fail(f"seed groups '{seed_ips[g['ip']]}' and '{g['name']}' share {g['ip']}")
+    seed_ips[g["ip"]] = g["name"]
+    try:
+        derived = peer_id(g["nodekey"])
+    except ValueError:
+        _fail(f"seed group '{g['name']}': nodekey must be 64 hex digits of a valid key")
+    if g.setdefault("peerId", derived) != derived:
+        _fail(
+            f"seed group '{g['name']}': peerId {g['peerId']} does not belong to its "
+            f"nodekey, which gives {derived} -- drop peerId to have it derived"
+        )
+    g.setdefault("args", [])
+
+
 def module_flake(m):
     """The flake reference for the module itself, with its chosen ref or rev."""
     mod = m["module"]
@@ -156,15 +259,6 @@ def module_flake(m):
     return f"{mod['flake']}{sep}ref={mod['ref']}"
 
 
-def seed_group(m):
-    for g in m["groups"]:
-        if g["kind"] == "seed":
-            return g
-    return None
-
-
-def seed_addr(m):
-    g = seed_group(m)
-    if g is None:
-        return ""
+def seed_addr(g):
+    """The /p2p/ multiaddr of a seed group."""
     return f"/ip4/{g['ip']}/tcp/{g['port']}/p2p/{g['peerId']}"
