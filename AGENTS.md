@@ -49,6 +49,8 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 | "attach X by hand", "I'll add it myself", "not on the schedule" | `"manual": true` on that group (no `startAfter`/`stopAfter`); after `up`, `./harness.sh start <group\|node>` attaches it and `stop` detaches it |
 | "stop a bootstrap at Y min" | `"stopAfter": Y*60` on that bootstrap's group |
 | "members only on bootstrap2" | `"bootstraps": ["bootstrap2"]` on the member group (default: all bootstraps, round-robin) |
+| "members join through every bootstrap", "a bootstrap list" | `"joinAll": true` on the member group (order = its `bootstraps`) |
+| "an unreachable / dead bootstrap first" | `"extraBootstraps": ["/ip4/10.0.0.99/tcp/45000/p2p/<id>"]` on the member group; derive `<id>` from any unused nodekey with `lib/manifest.py`'s `peer_id()` |
 | "a Z min test" | `./harness.sh run <Z*60>` — not a manifest field |
 | "on module / delivery / libp2p commit or branch X" | environment variables, see below |
 

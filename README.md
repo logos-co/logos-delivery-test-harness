@@ -174,9 +174,15 @@ one offset and optionally stopped at another*:
   (or one node, `start m4`) and detach it with `stop`, as often as you like. No
   `startAfter` / `stopAfter` on a manual group.
 - `bootstraps` (members) — the bootstrap groups this group joins through, handed
-  out round-robin across the fleet. Default: every bootstrap group. A
-  delivery-module member takes one bootstrap peer, because the plugin passes
-  libp2p only the first.
+  out round-robin across the fleet: one per member. Default: every bootstrap
+  group. Before logos-delivery-module passes libp2p every bootstrap peer, a
+  delivery-module member uses only the first of any list.
+- `joinAll` (members, default `false`) — each member joins through every group
+  in `bootstraps`, in that order, instead of one round-robin.
+- `extraBootstraps` (members) — `/p2p/` multiaddrs put in front of the group's
+  bootstrap list, e.g. a peer that is never up
+  (`/ip4/10.0.0.99/tcp/45000/p2p/<id>` is in the reserved range, so nothing
+  answers there).
 - `jitter` — random 0..n second spread within a delivery-module group. N daemons
   loading plugins at the same instant trip logos-core's 10 s plugin-load timeout.
 - `env` — extra environment for the group's delivery-module containers. The rest

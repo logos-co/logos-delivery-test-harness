@@ -67,8 +67,8 @@ def _native_service(g, name, ip, port, net_conf, join, depends_on):
     if "nodekey" in g:
         args.append(f"--nodekey={g['nodekey']}")
     args += list(g["args"])
-    if join:
-        args.append(f"--kad-bootstrap-node={join}")
+    for addr in join.split(",") if join else []:
+        args.append(f"--kad-bootstrap-node={addr}")
     cmd = "\n".join(f"      - {a}" for a in args)
     return f"""  {name}:
     image: logos-sim:local
@@ -234,9 +234,15 @@ def generate(m, compose_path, targets_path, plan_path):
             for ip in _addresses(net, g["count"], taken):
                 member_no += 1
                 name = f"m{member_no}"
-                # Round-robin over the whole fleet, so late joiners alternate too.
-                boot = boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]
-                join = manifest.bootstrap_addr(boot)
+                # Round-robin over the whole fleet, so late joiners alternate
+                # too; with `joinAll`, every bootstrap of the group, in order.
+                if g["joinAll"]:
+                    joined = [boots[b] for b in g["bootstraps"]]
+                else:
+                    joined = [boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]]
+                boot = joined[0]
+                join = ",".join(list(g["extraBootstraps"])
+                                + [manifest.bootstrap_addr(b) for b in joined])
                 joins[name] = boot["name"]
                 if g["kind"] == NATIVE:
                     services.append(
