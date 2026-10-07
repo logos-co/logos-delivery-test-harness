@@ -204,17 +204,21 @@ def load(path):
             _check_bootstrap(g, bootstrap_ips)
 
     bootstraps = [g["name"] for g in groups if g["role"] == "bootstrap"]
-    if not bootstraps:
-        _fail("manifest has no bootstrap group; members need one to join through")
     for g in groups:
         if g["role"] != "member":
             continue
         # The bootstraps this group's members join through, handed out
         # round-robin. A module member takes a single bootstrap peer: the plugin
         # passes libp2p only the first (see run-node.md, "Plugin-hosted discovery").
+        # An explicit [] joins an external DHT instead: the group's config
+        # (e.g. a network preset) names the kad bootstraps, the harness none.
+        if "bootstraps" not in g and not bootstraps:
+            _fail(
+                f"group '{g['name']}': manifest has no bootstrap group; give members "
+                "one to join through, or \"bootstraps\": [] to join an external DHT "
+                "named by their config"
+            )
         g.setdefault("bootstraps", bootstraps)
-        if not g["bootstraps"]:
-            _fail(f"group '{g['name']}': members need a bootstrap to join through")
         for b in g["bootstraps"]:
             if b not in bootstraps:
                 _fail(f"group '{g['name']}': no bootstrap group named '{b}'")
@@ -287,7 +291,11 @@ def _check_group(g, names):
     if g["kind"] == NATIVE:
         g.setdefault("args", [])
         for a in g["args"]:
-            if a.split("=")[0].startswith(HARNESS_OWNED_FLAGS):
+            flag = a.split("=")[0]
+            # Joining an external DHT, the group names its own kad bootstraps.
+            if flag == "--kad-bootstrap-node" and g.get("bootstraps") == []:
+                continue
+            if flag.startswith(HARNESS_OWNED_FLAGS):
                 _fail(
                     f"group '{g['name']}': {a.split('=')[0]} is set by the harness "
                     "(identity, network, metrics, bootstrap); drop it from args"

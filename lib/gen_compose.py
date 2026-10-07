@@ -210,8 +210,9 @@ def generate(m, compose_path, targets_path, plan_path):
     # joins the first one's DHT, so they form one network, not several.
     boots = {g["name"]: g for g in m["groups"] if g["role"] == "bootstrap"}
     taken = {ipaddress.ip_address(g["ip"]) for g in boots.values()}
-    first = next(iter(boots.values()))
-    dht_entry = manifest.bootstrap_addr(first)
+    # None when every member joins an external DHT ("bootstraps": []).
+    first = next(iter(boots.values()), None)
+    dht_entry = manifest.bootstrap_addr(first) if first else ""
 
     services, targets, plan = [], [], []
     member_no = 0
@@ -235,25 +236,28 @@ def generate(m, compose_path, targets_path, plan_path):
                 member_no += 1
                 name = f"m{member_no}"
                 # Round-robin over the whole fleet, so late joiners alternate too.
-                boot = boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]
-                join = manifest.bootstrap_addr(boot)
-                joins[name] = boot["name"]
+                # No bootstraps: the member's config names an external DHT.
+                join, dep = "", ""
+                if g["bootstraps"]:
+                    boot = boots[g["bootstraps"][(member_no - 1) % len(g["bootstraps"])]]
+                    join, dep = manifest.bootstrap_addr(boot), boot["name"]
+                    joins[name] = dep
                 if g["kind"] == NATIVE:
                     services.append(
-                        _native_service(g, name, ip, MODULE_TCP_PORT, net_conf, join, boot["name"])
+                        _native_service(g, name, ip, MODULE_TCP_PORT, net_conf, join, dep)
                     )
                 elif g["kind"] == DEMO_NODE:
                     # No Prometheus target: no CLI into the demo's core to start
                     # openmetrics with.
                     vnc[name] = DEMO_VNC_PORT + len(vnc)
                     services.append(
-                        _demo_service(g, name, ip, net_conf, join, boot["name"],
+                        _demo_service(g, name, ip, net_conf, join, dep,
                                       demo_paths, vnc[name])
                     )
                     names.append(name)
                     continue
                 else:
-                    services.append(_module_service(g, name, ip, net_conf, join, boot["name"]))
+                    services.append(_module_service(g, name, ip, net_conf, join, dep))
                 targets.append(_target(g, name, ip))
                 names.append(name)
         step = {
@@ -270,7 +274,7 @@ def generate(m, compose_path, targets_path, plan_path):
         if g["manual"]:
             step["manual"] = True
         if g["role"] == "member":
-            step["joins"] = {n: joins[n] for n in names}
+            step["joins"] = {n: joins[n] for n in names if n in joins}
         plan.append(step)
 
     with open(compose_path, "w") as f:
