@@ -35,10 +35,10 @@ def _base_url(locked):
 
 def _compose(base, rev=None, ref=None, submodules=False):
     parts = []
+    if ref:
+        parts.append("ref=" + ref)
     if rev:
         parts.append("rev=" + rev)
-    elif ref:
-        parts.append("ref=" + ref)
     if submodules:
         parts.append("submodules=1")
     if not parts:
@@ -115,6 +115,11 @@ def resolve(m, lock_path, out_path):
             if not (rev or ref):
                 missing.append(comp)
                 continue
+            # A git lock entry locks a rev *on* a ref. nix finds a rev that is
+            # not on the default branch (a release tag, say) only when told
+            # which ref, so keep the lock's when the rev is the lock's too.
+            if not ov and locked.get("type") == "git":
+                ref = locked.get("ref")
 
         resolved[comp] = {
             "flake": _compose(base, rev, ref, submodules),

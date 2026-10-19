@@ -218,9 +218,10 @@ def load(path):
     for g in groups:
         if g["role"] != "member":
             continue
-        # The bootstraps this group's members join through, handed out
-        # round-robin. A module member takes a single bootstrap peer: the plugin
-        # passes libp2p only the first (see run-node.md, "Plugin-hosted discovery").
+        # The bootstraps this group's members join through: one each,
+        # round-robin, or with `joinAll` every one of them, in this order.
+        # `extraBootstraps` are multiaddrs put in front of those, e.g. a peer
+        # that is never up, to see a member get past it.
         # An explicit [] joins an external DHT instead: the group's config
         # (e.g. a network preset) names the kad bootstraps, the harness none.
         if "bootstraps" not in g and not bootstraps:
@@ -230,6 +231,14 @@ def load(path):
                 "named by their config"
             )
         g.setdefault("bootstraps", bootstraps)
+        g.setdefault("joinAll", False)
+        if not isinstance(g["joinAll"], bool):
+            _fail(f"group '{g['name']}': joinAll must be true or false")
+        g.setdefault("extraBootstraps", [])
+        for addr in g["extraBootstraps"]:
+            if not (isinstance(addr, str) and addr.startswith("/") and "/p2p/" in addr
+                    and "," not in addr):
+                _fail(f"group '{g['name']}': extraBootstraps entry is not a /p2p/ multiaddr: {addr!r}")
         for b in g["bootstraps"]:
             if b not in bootstraps:
                 _fail(f"group '{g['name']}': no bootstrap group named '{b}'")

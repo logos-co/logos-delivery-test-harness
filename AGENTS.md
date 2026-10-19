@@ -51,6 +51,8 @@ Start from the closest file in `examples/` (or `harness.json`) and copy it to
 | "members only on bootstrap2" | `"bootstraps": ["bootstrap2"]` on the member group (default: all bootstraps, round-robin) |
 | "join logos.dev / logos.test", "members on the fleet" | `"bootstraps": []` on that group. Module members: `"config": "member-logosdev.json.tpl"` / `"member-logostest.json.tpl"`. Native members: `"--preset=logos.dev"` / `"--preset=logos.test"` in `args`, and **no** `clusterId` (the harness then drops `--cluster-id`; `--cluster-id=2` would turn any preset into logos.dev). No bootstrap group needed if every member group is on the fleet |
 | "on cluster N" (a non-preset network) | `"clusterId": N` on the group, or `network.clusterId` for all; a member must share its bootstraps' cluster. Shards stay manifest-wide (`network.shardsInNetwork`) |
+| "members join through every bootstrap", "a bootstrap list" | `"joinAll": true` on the member group (order = its `bootstraps`) |
+| "an unreachable / dead bootstrap first" | `"extraBootstraps": ["/ip4/10.0.0.99/tcp/45000/p2p/<id>"]` on the member group; derive `<id>` from any unused nodekey with `lib/manifest.py`'s `peer_id()` |
 | "a Z min test" | `./harness.sh run <Z*60>` — not a manifest field |
 | "on module / delivery / libp2p commit or branch X" | environment variables, see below |
 

@@ -28,7 +28,8 @@ mkdir -p /data "$(dirname "$LD_DISCO_TRACE")"
 tpl=/opt/sim/conf/$MEMBER_CONFIG
 [ -f "$tpl" ] || { log "no such node profile: $MEMBER_CONFIG"; exit 1; }
 bootstraps=""
-[ -n "$BOOTSTRAP_ADDR" ] && bootstraps="\"$BOOTSTRAP_ADDR\""
+# BOOTSTRAP_ADDR may list several, comma-separated: each becomes a JSON string.
+[ -n "$BOOTSTRAP_ADDR" ] && bootstraps="\"${BOOTSTRAP_ADDR//,/\",\"}\""
 sed -e "s|@IP@|$IP|g" -e "s|@BOOTSTRAPS@|$bootstraps|g" -e "s|@LOOKUP@|$LOOKUP|g" \
     -e "s|@CLUSTER@|$CLUSTER_ID|g" -e "s|@SHARDS@|$NUM_SHARDS|g" \
     -e "s|@TCP_PORT@|$TCP_PORT|g" \
