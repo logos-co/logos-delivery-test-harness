@@ -208,3 +208,10 @@ Lead with the verdict in one sentence, then:
 - Registrars keep an advert until it expires (900 s by default), so a stopped
   node's id can keep coming back from lookups for up to that long after the
   stop. That is expected, not a leak.
+- Fleet members (`"bootstraps": []`) depend on the preset's entry nodes. When
+  most are down (check with `nc -z <entry> 30303`), a delivery-module member's
+  libp2p start can outlast the entrypoint's 60 s `START_TIMEOUT` and log
+  `start FAILED: no nodeStarted event`. Give fleet groups
+  `"env": {"START_TIMEOUT": "300"}`, and report the fleet's state rather than a
+  regression. Fleet members also dial out only: they advertise their docker
+  address, so the fleet cannot dial them back.
