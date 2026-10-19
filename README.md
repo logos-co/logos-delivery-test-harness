@@ -159,7 +159,15 @@ one offset and optionally stopped at another*:
 - `args` (logosdeliverynode) — the node's behaviour flags. The harness sets
   identity, network, metrics and bootstrap flags itself (`--cluster-id`,
   `--shard`, `--nat`, `--tcp-port`, `--nodekey`, `--metrics-server*`,
-  `--kad-bootstrap-node`) and rejects them in `args`.
+  `--kad-bootstrap-node`) and rejects them in `args`. Two exceptions, for a
+  group joining a public network ([below](#joining-a-public-network)):
+  `--kad-bootstrap-node` is allowed with `"bootstraps": []`, and `--preset`
+  makes the harness leave out `--cluster-id`.
+- `clusterId` — the group's cluster. Default: `network.clusterId`. A member
+  must be on its bootstraps' cluster, and every bootstrap on the first one's.
+  Not allowed on a logosdeliverynode group with `--preset`: the preset names
+  the cluster. Shards are not per group: `network.shardsInNetwork` holds for
+  every node.
 - `startAfter` — seconds from T0, where T0 is when the offset-0 groups launch.
 - `stopAfter` — seconds from T0 at which the group's containers are stopped
   with `docker compose stop`. A delivery-module node's entrypoint passes the
@@ -176,7 +184,9 @@ one offset and optionally stopped at another*:
 - `bootstraps` (members) — the bootstrap groups this group joins through, handed
   out round-robin across the fleet. Default: every bootstrap group. A
   delivery-module member takes one bootstrap peer, because the plugin passes
-  libp2p only the first.
+  libp2p only the first. `[]` joins no harness bootstrap: the group's profile
+  or args name the network. A manifest needs no bootstrap group if every
+  member group says `[]`.
 - `jitter` — random 0..n second spread within a delivery-module group. N daemons
   loading plugins at the same instant trip logos-core's 10 s plugin-load timeout.
 - `env` — extra environment for the group's delivery-module containers. The rest
@@ -212,6 +222,34 @@ identity, so the others know where to join before it starts:
 logosdeliverynode nodes write no discovery trace and no stage log, so `report`
 and the `module lost` watchdog cover delivery-module nodes only; `collect` keeps
 every logosdeliverynode's log instead, and Prometheus scrapes both kinds.
+
+### Joining a public network
+
+Members can join logos.dev or logos.test instead of, or alongside, a local
+bootstrap. Give the group `"bootstraps": []` and let the network preset do
+the rest: its entry nodes become the node's kad bootstraps.
+
+```json
+{ "name": "test-mod", "role": "member", "count": 3, "bootstraps": [],
+  "config": "member-logostest.json.tpl" }
+
+{ "name": "test-native", "role": "member", "kind": "logosdeliverynode", "count": 3,
+  "bootstraps": [], "args": ["--preset=logos.test", "--entry-layer=kernel", "..."] }
+```
+
+| Profile in `conf/` | Network | Discovery |
+|---|---|---|
+| `member-logosdev.json.tpl` | logos.dev | kad on libp2p_module (plugin) |
+| `member-logosdev-kad.json.tpl` | logos.dev | kad in-process |
+| `member-logosdev-mix.json.tpl` | logos.dev | plugin kad, `anonymityLevel: Preferred` |
+| `member-logostest.json.tpl` | logos.test | kad on libp2p_module (plugin) |
+
+A logosdeliverynode takes `--preset=<network>` in `args`, and the harness then
+passes no `--cluster-id`. An explicit cluster id would override the preset's,
+and `--cluster-id=2` even replaces any preset with logos.dev. The other harness
+flags still apply, `--shard=0` included. The containers reach the network
+through docker's NAT and advertise their private address (`--nat=extip:`), so
+they dial out but cannot be dialled from it.
 
 ### Demo nodes
 
