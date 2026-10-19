@@ -54,9 +54,11 @@ def _depends(on):
 def _native_service(g, name, ip, port, net_conf, join, depends_on):
     """logosdeliverynode, as a bootstrap or a member. `join` is the bootstrap
     address it joins the DHT through, empty for the first bootstrap."""
-    args = [
-        "logosdeliverynode",
-        f"--cluster-id={net_conf['clusterId']}",
+    args = ["logosdeliverynode"]
+    # No clusterId: the group's --preset names the cluster (manifest.load).
+    if "clusterId" in g:
+        args.append(f"--cluster-id={g['clusterId']}")
+    args += [
         "--shard=0",
         f"--nat=extip:{ip}",
         f"--tcp-port={port}",
@@ -102,7 +104,7 @@ def _module_service(g, name, ip, net_conf, join, depends_on):
     env = {
         "BOOTSTRAP_ADDR": join,
         "MEMBER_CONFIG": g["config"],
-        "CLUSTER_ID": str(net_conf["clusterId"]),
+        "CLUSTER_ID": str(g["clusterId"]),
         "NUM_SHARDS": str(net_conf["shardsInNetwork"]),
         "START_JITTER": str(g["jitter"]),
         "P2P_PORT": str(MODULE_P2P_PORT),
@@ -149,7 +151,7 @@ def _demo_service(g, name, ip, net_conf, join, depends_on, paths, vnc_port):
     env = {
         "BOOTSTRAP_ADDR": join,
         "MEMBER_CONFIG": g["config"],
-        "CLUSTER_ID": str(net_conf["clusterId"]),
+        "CLUSTER_ID": str(g["clusterId"]),
         "NUM_SHARDS": str(net_conf["shardsInNetwork"]),
         "START_JITTER": str(g["jitter"]),
         "P2P_PORT": str(MODULE_P2P_PORT),

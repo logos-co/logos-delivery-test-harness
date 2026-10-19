@@ -200,10 +200,21 @@ def load(path):
     bootstrap_ips = {}
     for g in groups:
         _check_group(g, names)
+        # A native node with --preset takes its cluster from the preset alone.
+        if not _native_preset(g):
+            g.setdefault("clusterId", net["clusterId"])
         if g["role"] == "bootstrap":
             _check_bootstrap(g, bootstrap_ips)
 
     bootstraps = [g["name"] for g in groups if g["role"] == "bootstrap"]
+    # Bootstraps 2..N join the first one's DHT.
+    for b in bootstraps[1:]:
+        first, g = _group(groups, bootstraps[0]), _group(groups, b)
+        if _network(g) != _network(first):
+            _fail(
+                f"bootstrap group '{b}' is on {_network(g)}, the first bootstrap "
+                f"'{first['name']}' on {_network(first)}"
+            )
     for g in groups:
         if g["role"] != "member":
             continue
@@ -222,10 +233,15 @@ def load(path):
         for b in g["bootstraps"]:
             if b not in bootstraps:
                 _fail(f"group '{g['name']}': no bootstrap group named '{b}'")
-            boot = next(x for x in groups if x["name"] == b)
+            boot = _group(groups, b)
             # compose would otherwise start the bootstrap early, as a dependency.
             if boot["startAfter"] > g["startAfter"]:
                 _fail(f"group '{g['name']}' starts before its bootstrap '{b}'")
+            if _network(boot) != _network(g):
+                _fail(
+                    f"group '{g['name']}' is on {_network(g)}, its bootstrap '{b}' "
+                    f"on {_network(boot)}"
+                )
 
     # Overrides carry a _comment key for humans; drop it.
     overrides = {
@@ -300,6 +316,14 @@ def _check_group(g, names):
                     f"group '{g['name']}': {a.split('=')[0]} is set by the harness "
                     "(identity, network, metrics, bootstrap); drop it from args"
                 )
+        # The harness passes no --cluster-id next to --preset: an explicit
+        # cluster id overrides the preset's, and --cluster-id=2 even replaces
+        # the preset with logos.dev (logos-delivery toNetworkPresetConf).
+        if _native_preset(g) and "clusterId" in g:
+            _fail(
+                f"group '{g['name']}': --preset names the cluster; drop clusterId "
+                "(a cluster id next to a preset overrides it)"
+            )
     else:
         g.setdefault("config", "member.json.tpl")
 
@@ -344,6 +368,29 @@ def module_flake(m):
     if mod.get("rev"):
         return f"{mod['flake']}{sep}rev={mod['rev']}"
     return f"{mod['flake']}{sep}ref={mod['ref']}"
+
+
+def _group(groups, name):
+    return next(g for g in groups if g["name"] == name)
+
+
+def _native_preset(g):
+    """The --preset a logosdeliverynode group's args name, else None."""
+    if g["kind"] != NATIVE:
+        return None
+    args = g.get("args", [])
+    for i, a in enumerate(args):
+        if a.startswith("--preset="):
+            return a.split("=", 1)[1]
+        if a == "--preset" and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def _network(g):
+    """What a node must share with the bootstrap it joins."""
+    preset = _native_preset(g)
+    return f"preset {preset}" if preset else f"cluster {g['clusterId']}"
 
 
 def uses_demo(m):
