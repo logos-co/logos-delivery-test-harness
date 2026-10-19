@@ -130,6 +130,19 @@ before anything is built.
 > (`--enable-kad-discovery`, `--max-pure-libp2p-peers`, `plugin-kad-discovery`).
 > A module ref from before that work landed rejects them; change both together.
 
+### Network
+
+`network` holds what every node shares:
+
+- `subnet` (default `10.0.0.0/8`) — members get addresses scattered across it
+  ([why](#members-are-scattered)). It must match the compose network, set by
+  `SUBNET` (same default).
+- `clusterId` (default `42`) — the cluster of every group that does not set
+  its own.
+- `shardsInNetwork` (default `1`) — the shard count, rendered into the module
+  profiles as `@SHARDS@`. Not per group: every node of a network must shard the
+  same way. logosdeliverynode nodes always get `--shard=0`.
+
 ### Groups
 
 A group is *n nodes of one role and one kind, sharing one profile, launched at
@@ -145,7 +158,8 @@ one offset and optionally stopped at another*:
 
 - `role` — `bootstrap` (a fixed, known node the others join the DHT through) or
   `member`.
-- `kind` — what runs. Any role can be either:
+- `kind` — what runs. A bootstrap is `logosdeliverynode` or `delivery-module`;
+  a member can be any of the three:
 
   | `kind` | Runs | Default for |
   |---|---|---|
@@ -154,8 +168,10 @@ one offset and optionally stopped at another*:
   | `delivery-demo` | the [logos-delivery-demo](https://github.com/logos-co/logos-delivery-demo) UI with its own delivery node, which you watch in a browser; configured by the same `config` profile ([below](#demo-nodes)) | — (members only) |
 
 - `count` — n nodes. Bootstrap groups hold exactly one (below).
-- `config` (delivery-module) — the profile in `conf/`, rendered per node
-  (`@IP@`, `@BOOTSTRAPS@`, `@LOOKUP@`, `@CLUSTER@`, `@SHARDS@`, `@TCP_PORT@`).
+- `config` (delivery-module, delivery-demo) — the profile in `conf/`, rendered
+  per node (`@IP@`, `@BOOTSTRAPS@`, `@LOOKUP@`, `@CLUSTER@`, `@SHARDS@`,
+  `@TCP_PORT@`). Default `member.json.tpl`; the others are listed under
+  [Joining a public network](#joining-a-public-network).
 - `args` (logosdeliverynode) — the node's behaviour flags. The harness sets
   identity, network, metrics and bootstrap flags itself (`--cluster-id`,
   `--shard`, `--nat`, `--tcp-port`, `--nodekey`, `--metrics-server*`,
@@ -183,8 +199,9 @@ one offset and optionally stopped at another*:
   `startAfter` / `stopAfter` on a manual group.
 - `bootstraps` (members) — the bootstrap groups this group joins through, handed
   out round-robin across the fleet: one per member. Default: every bootstrap
-  group. Before logos-delivery-module passes libp2p every bootstrap peer, a
-  delivery-module member uses only the first of any list. `[]` joins no
+  group. A delivery-module member hands libp2p its whole list (the trace shows
+  `libp2p createNode OK bootstrapNodes=N`); older logos-delivery-module refs
+  passed only the first. `[]` joins no
   harness bootstrap: the group's profile or args name the network. A manifest
   needs no bootstrap group if every member group says `[]`.
 - `joinAll` (members, default `false`) — each member joins through every group
@@ -192,10 +209,12 @@ one offset and optionally stopped at another*:
 - `extraBootstraps` (members) — `/p2p/` multiaddrs put in front of the group's
   bootstrap list, e.g. a peer that is never up
   (`/ip4/10.0.0.99/tcp/45000/p2p/<id>` is in the reserved range, so nothing
-  answers there).
+  answers there). A module member gets them only through a profile with
+  `@BOOTSTRAPS@`; the public-network profiles have none.
 - `jitter` — random 0..n second spread within a delivery-module group. N daemons
   loading plugins at the same instant trip logos-core's 10 s plugin-load timeout.
-- `env` — extra environment for the group's delivery-module containers. The rest
+- `env` — extra environment for the group's delivery-module and delivery-demo
+  containers (a logosdeliverynode takes none). The rest
   is derived (`BOOTSTRAP_ADDR`, `CLUSTER_ID`, `NUM_SHARDS`, ports), but these are
   only reachable here: `LOOKUP_INTERVAL` (seconds, into the rendered profile),
   `MESH_CONTENT_TOPIC` (what the node subscribes to, default
@@ -245,6 +264,8 @@ the rest: its entry nodes become the node's kad bootstraps.
 
 | Profile in `conf/` | Network | Discovery |
 |---|---|---|
+| `member.json.tpl` (default) | the harness's: `@CLUSTER@`, `@SHARDS@`, `@BOOTSTRAPS@` | kad on libp2p_module (plugin) |
+| `member-mix.json.tpl` | the harness's | plugin kad, `anonymityLevel: Preferred` |
 | `member-logosdev.json.tpl` | logos.dev | kad on libp2p_module (plugin) |
 | `member-logosdev-kad.json.tpl` | logos.dev | kad in-process |
 | `member-logosdev-mix.json.tpl` | logos.dev | plugin kad, `anonymityLevel: Preferred` |
@@ -269,7 +290,8 @@ use in a browser:
 ```
 
 It takes the same fields as a delivery-module member (`count`, `startAfter`,
-`stopAfter`, `jitter`, `config`, `env`, `bootstraps`) and joins the same way:
+`stopAfter`, `manual`, `jitter`, `config`, `env`, `clusterId`, `bootstraps`,
+`joinAll`, `extraBootstraps`) and joins the same way:
 the profile is rendered as for a module member, and the node is created with it.
 Each instance's screen is published through noVNC on `6080 + n` —
 `http://localhost:6080/vnc.html` for the first. `gen` prints the URLs and `run`
@@ -318,7 +340,7 @@ tail -f out/traces/m4.trace                         # its discovery lookups as t
 The group name becomes a Prometheus label, so dashboards can compare late joiners
 against steady-state nodes without hand-written queries.
 
-Members are scattered across the subnet on purpose: the nim-libp2p registrar
+<a id="members-are-scattered"></a>Members are scattered across the subnet on purpose: the nim-libp2p registrar
 scores an advertiser by how many address-prefix bits it shares with the ads it
 already holds, and every shared bit costs `advertExpiry/32` of waiting.
 Sequential addresses in one /24 share ~27 bits and cost 13–15 minutes per
@@ -338,6 +360,7 @@ registration.
 | `harness.sh stop <group\|node>…` | stop them again (graceful, as for `stopAfter`); `start` brings them back |
 | `harness.sh down [-v]` | tear down |
 | `harness.sh report [dir] [n]` | discovery report over a trace dir (default `out/traces`); `n` nodes expected in the DHT, default from the plan |
+| `promq.sh '<promql>'` | an instant Prometheus query against the running stack, from inside its network (`--raw <path>` for any API path) |
 
 `harness.sh` with no command prints all of this, including the revision
 prefixes, which it reads from `lib/manifest.py` so the help cannot drift.
@@ -376,9 +399,11 @@ how you force a cold build.
 
 ```
 harness.sh           CLI
+promq.sh             Prometheus queries against the running stack
 harness.json         default manifest
+docker-compose.yml   network, Prometheus, Grafana (nodes come from out/compose.groups.yml)
 lib/                 manifest parsing, lock resolution, generators
-docker/              Dockerfile, member entrypoint
+docker/              member and demo images: Dockerfiles, entrypoints, profile renderer, QML inspector client
 conf/                node profiles
 monitoring/          Prometheus config, Grafana provisioning + dashboards
 examples/            ready-made topologies
