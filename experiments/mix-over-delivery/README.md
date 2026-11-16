@@ -39,6 +39,14 @@ build gives.
 | `mixnet-46-pr4647` | 46 | #4647 stack | 62 min | the same on the PR stack | PASS |
 | `mixnet-46-pr4647-churn` | 46 | #4647 stack | 62 min | 5 of 25 mix nodes stopped at 1400 s | PASS |
 | `mixnet-23-pr4647-rln` | 23 | #4647 stack + RLN | 62 min | Mix RLN: 12 module mix nodes, 4 senders | PASS |
+| `mixnet-23-train4-rln` | 23 | fourth train `27b59e17` + RLN | 62 min | run 5: the `mixnet-23-pr4647-rln` network on what replaces the #4647 stack | FAIL: 2,750/2,750 propagated and confirmed, p50 1.0 s, but every message is missing at its own exit node |
+
+The #4647 stack is obsolete (REPORT.html, section 05). `mixnet-23-train4-rln`
+builds the tip of the fourth delivery train from the fork
+`fcecin/logos-delivery` (PRs 401, 402, 403, 405, 406; 401 is upstream draft
+#4729). Its `nimble.lock` pins nim-libp2p-mix `fe620629`, the 2026-11-06 head of
+logos-co/nim-libp2p-mix#87, so the build has the mix stack #82, #85, #86, #87 as
+it was then, not its current heads.
 
 The `mixnet-*` manifests come from `lib/gen_mixnet.py`. In the recorded churn
 run the five stopped nodes were brought back by hand at T0+2643 s:

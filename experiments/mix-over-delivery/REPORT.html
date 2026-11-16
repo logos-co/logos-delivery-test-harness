@@ -68,10 +68,10 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
   <div class="lambda">λ Logos</div>
   <h1>Mix over Delivery</h1>
   <p class="lead">What logos-delivery does today, what the open reachability PR stack changes, what issue&nbsp;183 asks for, and what four hour-long harness runs on a 46-node network measured.</p>
-  <p class="meta">2026-11-15 · logos-delivery master <code>39b5f4ee9</code> · PR stack tip #4647 <code>69f3ff21</code> · harness branch <code>feat/rln-lez</code> · all runs on one Apple-silicon host (Docker VM: 10 CPUs, 12.6&nbsp;GB)</p>
+  <p class="meta">2026-11-15, section 05 added 2026-11-16 · logos-delivery master <code>39b5f4ee9</code> · PR stack tip #4647 <code>69f3ff21</code> · harness branch <code>feat/rln-lez</code> · all runs on one Apple-silicon host (Docker VM: 10 CPUs, 12.6&nbsp;GB)</p>
   <nav>
     <a href="#s1">01 Summary</a><a href="#s2">02 Current state</a><a href="#s3">03 Issue 183</a>
-    <a href="#s4">04 Feature matrix</a><a href="#s5">05 Harness</a><a href="#s6">06 The four cases</a><a href="#s7">07 Limits</a>
+    <a href="#s4">04 Feature matrix</a><a href="#s4b">05 After the stack</a><a href="#s5">06 Harness</a><a href="#s6">07 The four cases</a><a href="#s7">08 Limits</a>
   </nav>
 </div>
 </header>
@@ -84,6 +84,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
     <li><b>Master breaks under churn; the PR stack does not.</b> On a small network, one stopped mix node made a third of master's sends report failure. The stack through #4647 lost nothing when 5 of 25 mix nodes were stopped for 21 minutes.</li>
     <li><b>The stack and issue 183 barely overlap.</b> The stack makes today's sends reliable and safe behind NAT. Issue 183's items (cover traffic, Edge/Core wiring, memberships, API cleanup) are untouched by it.</li>
     <li><b>Mix over RLN works, but its cost could not be measured at 46 nodes on one host.</b> Proof generation saturated the machine. <span id="rln-summary">At 23 nodes it delivered 2,747 of 2,750 sends at a median of 1.6&nbsp;s, about 1.2&nbsp;s more than without RLN, using 4.3 cores against about 2 for twice the nodes without it.</span></li>
+    <li><b>The measured stack has been withdrawn.</b> Its author replaced it with four mix library PRs and a new delivery train (<a href="#s4b">section 05</a>). The replacement keeps the send-reliability fixes and drops the NAT reply fix; it has not been run in the harness.</li>
   </ul>
 </div>
 </section>
@@ -118,6 +119,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
   </div>
 
   <h3>The PR stack (#4631 → #4647), open and unreviewed</h3>
+  <div class="note"><b>Obsolete since 2026-11-16.</b> Its author has withdrawn this stack in favour of the work in <a href="#s4b">section 05</a>. The table and the measurements below are kept as recorded.</div>
   <div class="tw"><table>
     <tr><th>PR</th><th>What it changes</th><th>Master behaviour</th><th>Measured in the harness</th></tr>
     <tr><td>#4631</td><td>The last reply hop is a peer already connected to the sender. Mix nodes are used only at public or relayed addresses, with <code>mix-allow-all-addresses</code> to opt out.</td><td>Random last reply hop: replies to a sender behind NAT are lost. Any IPv4 address accepted.</td><td>The opt-out was needed on the harness's private network. NAT itself not exercised.</td></tr>
@@ -180,6 +182,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
 <section id="s4" class="dark">
 <div class="wrap">
   <div class="num">04</div><h2>Feature matrix and deviations</h2>
+  <div class="note"><b>The stack column is obsolete.</b> <a href="#s4b">Section 05</a> has the same items against what replaces it.</div>
   <p>Master cells come from reading the code at <code>39b5f4ee9</code>. Stack cells come from the PR descriptions, not their diffs, unless a harness measurement is named.</p>
 
   <div class="tw"><table>
@@ -208,9 +211,66 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
 </div>
 </section>
 
+<section id="s4b" class="sagebg">
+<div class="wrap">
+  <div class="num">05</div><h2>After the stack: the mix library PRs and the fourth train</h2>
+  <p>State on 2026-11-16. The author of the #4631 → #4647 stack answered this report: that stack is obsolete and serves as input only. Sections 02 and 04 are kept as the record of what was measured on it. What replaces it is in two repositories.</p>
+  <ul>
+    <li><b>Mix library:</b> four stacked PRs on <code>logos-co/nim-libp2p-mix</code>, #82 → #85 → #86 → #87. The author asks for these to be merged or otherwise resolved first.</li>
+    <li><b>Delivery:</b> draft #4729 is the only upstream PR meant to merge. It is the first of five PRs of a "fourth train" on the fork <code>fcecin/logos-delivery</code> (PRs 401, 402, 403, 405, 406); the other four are not upstream yet.</li>
+  </ul>
+  <p>Merge order as #4729 states it: the four mix PRs, then a pin bump in <code>mix-rln-spam-protection-plugin</code>, then #4729, then the rest of the train.</p>
+
+  <h3>The mix library stack</h3>
+  <p>Read from the source diffs at the heads of 2026-11-15 (#87 at <code>304fd96</code>). Tests were not read and nothing was run on these heads.</p>
+  <div class="tw"><table>
+    <tr><th>PR</th><th>What the code does</th><th>Limit seen in the code</th><th>Review</th></tr>
+    <tr><td>#82</td><td>A mix node that fails a dial as the first hop is skipped for one minute (<code>DefaultHopBackoff</code>), for sends and for cover paths. A successful dial clears it.</td><td>First hop only. A later hop that cannot be dialed is chosen again.</td><td>required</td></tr>
+    <tr><td>#85</td><td>A pool member counts only if it has a usable hop address. The host passes a <code>hopAddressPolicy</code>; the default accepts any address, <code>publicHopAddressPolicy</code> accepts public IPv4 and circuit-relay routes through a public relay, direct before relayed. A send to an exit needs 2 other pool members, not 3. <code>mix_pool_size</code> is the usable count.</td><td>IPv4 TCP or QUIC-v1 only: an IPv6-only mix node is never usable. The sender's own reply address is not checked.</td><td>changes requested</td></tr>
+    <tr><td>#86</td><td>Pending sends are cancelled when the protocol stops or the entry connection closes; sends outside start/stop return an error.</td><td>—</td><td>approved</td></tr>
+    <tr><td>#87</td><td>A packet that was never written gives its rate-limit slot and proof back, cover packets included.</td><td>—</td><td>required</td></tr>
+  </table></div>
+  <p>Cover traffic stays off unless the host passes it. Nothing in the stack touches coordination batching, memberships, registries, modes or advertising.</p>
+
+  <h3>The fourth delivery train</h3>
+  <p>From the PR texts and the author's summary, not from the diffs.</p>
+  <div class="tw"><table>
+    <tr><th>Fork PR</th><th>What it changes</th><th>Replaces</th><th>Upstream</th></tr>
+    <tr><td>401</td><td>Pins the mix library with the four PRs above; paths use only mix nodes at a public or relayed address; <code>--mix-allow-all-addresses</code> opts out.</td><td>#4411, #4412, #4414, #4415, #4631, #4632, #4635, #4636, #4646</td><td>draft #4729</td></tr>
+    <tr><td>402</td><td>Configured mix nodes stay in the peer store through a prune and through libp2p's cleanup of disconnected peers.</td><td>#4413, #4640</td><td>—</td></tr>
+    <tr><td>403</td><td>A send completes when the network already has the message: a copy comes back, or a relay refuses it as already seen. Applies to mix, relay and lightpush.</td><td>#4416, #4647</td><td>—</td></tr>
+    <tr><td>405</td><td>A mix send with no answer is sent once more, then ends as sent and unconfirmed.</td><td>—</td><td>—</td></tr>
+    <tr><td>406</td><td>Every send event carries <code>anonymous</code>; a counter records <code>Preferred</code> sends attempted in the clear.</td><td>—</td><td>—</td></tr>
+  </table></div>
+  <div class="note"><b>#4729 is behind the mix stack.</b> It pins mix commit <code>fe62062</code>, the head of #87 on 2026-11-06, and passes <code>hopAddressClasses</code>. #85 was reworked on 2026-11-14 and now takes a <code>hopAddressPolicy</code>; the old symbol is gone. #4729 and fork PR 401 need a code change against the new #85, not only a pin bump.</div>
+
+  <h3>Issue 183 against the new composition</h3>
+  <div class="tw"><table>
+    <tr><th>#</th><th>Issue 183 item</th><th>Mix stack + fourth train</th><th>Against section 04</th></tr>
+    <tr><td>0</td><td>Batched coordination in Core</td><td>Not touched</td><td>same</td></tr>
+    <tr><td>1</td><td>Cover traffic in Core</td><td>Not enabled; #87 only refunds a cancelled cover packet</td><td>same</td></tr>
+    <tr><td>2</td><td>Advertise the Mix key only in Core</td><td>The advertising rule of #4646 is dropped. A node at a private address still advertises and is kept off paths by the address check. A node behind a router can advertise the router's address (logos-delivery#4709).</td><td><span class="tag miss">weaker</span></td></tr>
+    <tr><td>3</td><td>No Mix coordination in Edge</td><td>Not touched</td><td>same</td></tr>
+    <tr><td>4</td><td>Membership check and readiness</td><td>Nothing on memberships. Mix health does not see the first-hop backoff, so a node with a small pool can report ready while sends fail (#4729 notes).</td><td><span class="tag miss">weaker</span></td></tr>
+    <tr><td>5</td><td><code>mode</code> decides Mix; default <code>Preferred</code></td><td>Not touched</td><td>same</td></tr>
+    <tr><td>5</td><td>NAT: Edge gets a relayed reply address</td><td>Not addressed. The last hop of a reply path is still the sender's own address (<code>buildSurb</code>). The mix library did not take the interface #4631 needed (nim-libp2p-mix#72). Tracked in logos-delivery#4694 and nim-libp2p-mix#79.</td><td><span class="tag miss">lost</span></td></tr>
+    <tr><td>7</td><td>Drop the Mix API</td><td>Present; <code>waku_mix_add_peer</code> now returns an error for a peer with no usable address</td><td>same</td></tr>
+    <tr><td>—</td><td>Separate Relay and Mix registries</td><td>Not touched</td><td>same</td></tr>
+  </table></div>
+  <p>Outside the issue's list, the new composition keeps what the old stack was measured for: no false send errors after a mix node stops (403), dead first hops skipped (#82), configured nodes kept (402). It adds the unconfirmed outcome (405) and the <code>anonymous</code> field (406), which closes logos-delivery#4690 for the app. Not carried over: stale discovered mix keys stay in the pool (#4632).</p>
+
+  <h3>What this means for the measurements</h3>
+  <ul>
+    <li>The runs in section 07 on the #4647 stack show that completing a send on seeing the message again removes master's false errors and the exit-node miss. Fork PR 403 is a different implementation of that idea. Run 5 measured it as part of the fourth train: no false errors, but the exit-node miss is back.</li>
+    <li>With #4729 a private test network needs <code>mix-allow-all-addresses</code> on every node, or the pool stays empty. The harness sets it (<code>MIX_ALLOW_ALL=1</code>, <code>--mix-allow-all-addresses=true</code>).</li>
+    <li id="run5-state"><b>Run 5 (2026-11-16): the fourth train brings the exit-node miss back.</b> <code>manifests/mixnet-23-train4-rln.json</code> is the run 4b network (23 nodes, Mix RLN) on the fourth train tip <code>27b59e17</code>, built from the fork as image <code>logos-sim:train4-rln</code> (<code>v0.40.0-g27b59e</code>, mix library <code>fe62062</code>, the stack as it was on 2026-11-06, not the current heads). All 2,750 sends were accepted, propagated and confirmed, with no <code>messageError</code>, no reply timeout and one try per message; send → propagated p50 / p90 / p99 was 1,005 / 1,654 / 2,649 ms, faster than run 4b. But no message reached every receiver: each one is missing at exactly one node, the node that was its exit. No node received a message it exited itself, and the per-node miss counts equal the per-node exit counts (121 to 209). This is the fault of master in run 2; it shows on every message here because all 16 exit nodes are module nodes whose receptions are judged. The harness verdict is FAIL for that reason. <code>mix_messages_error_total</code> rose by one per send on each sender (2,750 in total); the cause was not looked into. The module (<code>logos-delivery-module</code> master) does not know the new <code>message_unconfirmed</code> event, so an unconfirmed send would not show in the per-message report; every send here was confirmed.</li>
+  </ul>
+</div>
+</section>
+
 <section id="s5">
 <div class="wrap">
-  <div class="num">05</div><h2>The test harness</h2>
+  <div class="num">06</div><h2>The test harness</h2>
   <p class="lead">A manifest describes groups of nodes; the harness builds one image from pinned sources, generates a Docker Compose stack on a private <code>10.0.0.0/8</code> network, runs it for a fixed time and collects events, logs and metrics.</p>
 
   <div class="cols">
@@ -324,7 +384,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
 
 <section id="s6" class="dark">
 <div class="wrap">
-  <div class="num">06</div><h2>The four cases</h2>
+  <div class="num">07</div><h2>The four cases</h2>
   <p>Run 4b is the smaller rerun of run 4. Runs 1 to 4: 46 nodes, 8 senders, 700 <code>Required</code> messages per sender at one every 5&nbsp;s (1.6 messages per second in total), about 58 minutes of sending.</p>
 
   <div class="tw"><table>
@@ -334,6 +394,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
     <tr><td>3. Churn: 5 of 25 mix nodes down for 21 min</td><td>#4647 stack</td><td class="n">5,600 / 5,600</td><td class="n">5,600 / 5,600</td><td class="n">450 / 755 ms / 15.9 s</td><td class="n">0</td></tr>
     <tr><td>4. Mix RLN, 45 RLN nodes</td><td>#4647 stack + RLN</td><td class="n">65 / 4,082</td><td class="n">65 / 4,082</td><td class="n">not meaningful</td><td class="n">3,940</td></tr>
     <tr id="rln-row"><td>4b. Mix RLN, 22 RLN nodes</td><td>#4647 stack + RLN</td><td class="n">2,747 / 2,750</td><td class="n">2,748 / 2,750</td><td class="n">1,618 / 1,979 / 2,512 ms</td><td class="n">0</td></tr>
+    <tr><td>5. Mix RLN, 22 RLN nodes</td><td>fourth train <code>27b59e17</code> + RLN</td><td class="n">2,750 / 2,750</td><td class="n">0 / 2,750</td><td class="n">1,005 / 1,654 / 2,649 ms</td><td class="n">0</td></tr>
   </table></div>
 
   <h3>Runs 1 and 2: steady state, stack against master</h3>
@@ -443,10 +504,10 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
 
 <section id="s7">
 <div class="wrap">
-  <div class="num">07</div><h2>Limits of this evidence</h2>
+  <div class="num">08</div><h2>Limits of this evidence</h2>
   <ul>
     <li><b>One host.</b> All nodes share 10 cores and one loopback-fast network. There is no added latency, loss or NAT; #4631's NAT behaviour was not exercised.</li>
-    <li><b>Static pools.</b> Senders were given all mix nodes at start. A discovery-fed pool was tested once, on a small network on master (section 06), where it took about 16 minutes to fill.</li>
+    <li><b>Static pools.</b> Senders were given all mix nodes at start. A discovery-fed pool was tested once, on a small network on master (section 07), where it took about 16 minutes to fill.</li>
     <li><b>One run per case.</b> Differences of a few tens of milliseconds are within what a repeat could move.</li>
     <li><b>Route data gaps.</b> In runs 2 and 3 one sender's log was cut short at collection, so exit and retry figures cover 7 of 8 senders there. Delivery and latency figures are complete.</li>
     <li><b>Stack cells in the matrix are from PR descriptions.</b> Not verified: whether #4646 also stops the ENR Mix bit and the rendezvous record.</li>
