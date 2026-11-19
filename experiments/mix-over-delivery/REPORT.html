@@ -68,7 +68,7 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
   <div class="lambda">λ Logos</div>
   <h1>Mix over Delivery</h1>
   <p class="lead">What logos-delivery does today, what the open reachability PR stack changes, what issue&nbsp;183 asks for, and what four hour-long harness runs on a 46-node network measured.</p>
-  <p class="meta">2026-11-15, section 05 added 2026-11-16 · logos-delivery master <code>39b5f4ee9</code> · PR stack tip #4647 <code>69f3ff21</code> · harness branch <code>feat/rln-lez</code> · all runs on one Apple-silicon host (Docker VM: 10 CPUs, 12.6&nbsp;GB)</p>
+  <p class="meta">2026-11-15, section 05 added 2026-11-16, run 6 the same day · logos-delivery master <code>39b5f4ee9</code> · PR stack tip #4647 <code>69f3ff21</code> · harness branch <code>feat/rln-lez</code> · all runs on one Apple-silicon host (Docker VM: 10 CPUs, 12.6&nbsp;GB)</p>
   <nav>
     <a href="#s1">01 Summary</a><a href="#s2">02 Current state</a><a href="#s3">03 Issue 183</a>
     <a href="#s4">04 Feature matrix</a><a href="#s4b">05 After the stack</a><a href="#s5">06 Harness</a><a href="#s6">07 The four cases</a><a href="#s7">08 Limits</a>
@@ -265,6 +265,37 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
     <li>With #4729 a private test network needs <code>mix-allow-all-addresses</code> on every node, or the pool stays empty. The harness sets it (<code>MIX_ALLOW_ALL=1</code>, <code>--mix-allow-all-addresses=true</code>).</li>
     <li id="run5-state"><b>Run 5 (2026-11-16): the fourth train brings the exit-node miss back.</b> <code>manifests/mixnet-23-train4-rln.json</code> is the run 4b network (23 nodes, Mix RLN) on the fourth train tip <code>27b59e17</code>, built from the fork as image <code>logos-sim:train4-rln</code> (<code>v0.40.0-g27b59e</code>, mix library <code>fe62062</code>, the stack as it was on 2026-11-06, not the current heads). All 2,750 sends were accepted, propagated and confirmed, with no <code>messageError</code>, no reply timeout and one try per message; send → propagated p50 / p90 / p99 was 1,005 / 1,654 / 2,649 ms, faster than run 4b. But no message reached every receiver: each one is missing at exactly one node, the node that was its exit. No node received a message it exited itself, and the per-node miss counts equal the per-node exit counts (121 to 209). This is the fault of master in run 2; it shows on every message here because all 16 exit nodes are module nodes whose receptions are judged. The harness verdict is FAIL for that reason. <code>mix_messages_error_total</code> rose by one per send on each sender (2,750 in total); the cause was not looked into. The module (<code>logos-delivery-module</code> master) does not know the new <code>message_unconfirmed</code> event, so an unconfirmed send would not show in the per-message report; every send here was confirmed.</li>
   </ul>
+
+  <h3 id="run6">Run 6: the pool from service discovery, IP similarity switched off</h3>
+  <p>Run 6 is the run 4b network with no static pool: the 12 mix nodes and the 4 senders start with an empty pool and learn mix nodes from Kad service discovery only. To make discovery fast, <code>libp2p_module</code> is built from the branch <code>experiment/no-ipsim</code> (<code>040c2f7</code>), which sets nim-libp2p's <code>ipSimCoefficient</code> to 0, so a registrar no longer makes an advertiser wait for sharing address bits with adverts it holds. Neither <code>libp2p_module</code> nor logos-delivery has a setting for this. The native bootstrap node runs its own discovery and keeps the default.</p>
+  <div class="tw"><table>
+    <tr><th>Run</th><th>Build</th><th class="n">Pool usable (4 mix nodes)</th><th class="n">Propagated</th><th class="n">Reached all receivers</th><th class="n">p50 send → propagated</th><th>Valid</th></tr>
+    <tr><td>Smoke: 5 mix nodes, 1 sender, 15 min</td><td>#4647 stack</td><td class="n">55 s after start</td><td class="n">79 / 79</td><td class="n">79 / 79</td><td class="n">1,427 ms</td><td>yes</td></tr>
+    <tr><td>6a: 23 nodes, 62 min</td><td>#4647 stack</td><td class="n">about 60 s</td><td class="n">266 / 2,116</td><td class="n">255 / 2,116</td><td class="n">17.3 s</td><td>no: host saturated</td></tr>
+    <tr><td>6b: 23 nodes, 62 min</td><td>fourth train <code>27b59e17</code></td><td class="n">about 60 s</td><td class="n">2,653 / 2,694</td><td class="n">0 / 2,694</td><td class="n">990 ms</td><td>first 48 min</td></tr>
+  </table></div>
+  <ul>
+    <li><b>With the IP term off, a discovery-fed pool is usable in about a minute</b>, against about 16 minutes in the earlier discovery run (section 07). In the 23-node runs every mix-capable node held at least 12 others within about 20 s of its first metric sample, 60 to 75 s after the stack started. In 6b the pools then stayed complete (15) for the whole run.</li>
+    <li><b>Module mix nodes are found through the plugin.</b> The earlier discovery run used native mix nodes; here the mix nodes are delivery-module nodes that advertise <code>/mix/1.0.0</code> through <code>libp2p_module</code>.</li>
+    <li><b>6b behaves like run 5 for 48 minutes</b>: every send propagated at p50 about 0.96 s with one try, and every message is missing at its own exit node. So the discovery-fed pool changes nothing against the static pool on this build. At about 54 minutes from start the load on the host jumped from about 5 cores to all 10 and stayed there; in the last 10 minutes 41 sends were never confirmed and reported no error either, and 77 messages needed a second try. What set this off is not known.</li>
+    <li><b>6a is not a valid delivery measurement.</b> The host was saturated from the first send (about 9 of 10 cores throughout, against 4.3 in run 4b), sends took p50 17 s from the start, most messages needed three tries, and after 5 minutes nearly all failed with "Unable to send within retry time window" (1,342) or an RLN proof timestamp outside the epoch window (489). One mix node, <code>mix4</code>, never started ("libp2p backend unavailable … no addr was provided"), so the network had 11 mix nodes. Why this build went into overload with a discovery-fed pool when it did not with a static one is not established; the run has to be repeated.</li>
+    <li><b>This network sits at the limit of the host.</b> Both runs show that once sends are retried, the extra Mix RLN proofs keep the host saturated. Results at this size on this machine need a load check before they are read.</li>
+  </ul>
+
+  <h3 id="run7">Run 7: #4729 on master, coordination metadata in batches</h3>
+  <p>Run 7 (2026-11-18) is the run 4b network (23 nodes, Mix RLN, static pool) on logos-delivery <code>77547c6d9</code>, the tip of #4729 on master <code>1183c3767</code> (Nim 2.2.12, ORC). That build pins <code>nim-libp2p-mix</code> at its merged master <code>ebf144d</code> and <code>mix-rln-spam-protection-plugin</code> at <code>538e3e42</code>, the head of its open PR 32, which publishes coordination metadata as one batch per Mix epoch and no longer one message per verified proof. Manifest <code>manifests/mixnet-23-pr4729-rln.json</code>, image <code>logos-sim:pr4729-rln</code>. This build does not have the #4647 stack.</p>
+  <div class="tw"><table>
+    <tr><th>Run</th><th>Build</th><th>Propagated</th><th>Reached all receivers</th><th>send → propagated p50 / p90 / p99</th><th>Coordination receptions</th><th>Host load, mean</th></tr>
+    <tr><td>4b</td><td>#4647 stack</td><td>2,750 / 2,750</td><td>2,748 / 2,750</td><td>1,618 / 1,979 / 2,512 ms</td><td>263,750</td><td>4.3 cores</td></tr>
+    <tr><td>5</td><td>fourth train <code>27b59e17</code></td><td>2,750 / 2,750</td><td>0 / 2,750</td><td>1,005 / 1,654 / 2,649 ms</td><td>247,493</td><td>4.9 cores</td></tr>
+    <tr><td>7</td><td>#4729 <code>77547c6d9</code></td><td>2,736 / 2,736</td><td>0 / 2,736</td><td>1,574 / 2,252 / 3,327 ms</td><td>79,699</td><td>3.0 cores</td></tr>
+  </table></div>
+  <ul>
+    <li><b>Every send went through mix with Mix RLN.</b> All 2,736 judged sends were accepted, propagated and confirmed, with no <code>messageError</code> and no reply timeout. 2,738 messages needed one try and 22 needed two to seven.</li>
+    <li><b>The exit-node miss is here, as on master.</b> No message reached every receiver: each one is missing at exactly one node, its exit. This is the fault of runs 2 and 5. #4729 does not carry the #4647 stack that removed it, so the FAIL verdict is about master and not about the address policy or the plugin.</li>
+    <li><b>Batches cut the coordination traffic by about 70%.</b> The nodes received 79,699 coordination messages against 263,750 in run 4b, and the host carried the network at 3.0 cores on average against 4.3. No node rejected a coordination payload in the 8-node smoke before the run.</li>
+    <li><b>Load and latency grew during the run.</b> The host load per quarter of the run was 2.1, 2.6, 3.2 and 3.9 cores, and the p50 of send → propagated went from about 1.45 s to 1.97 s over the last 20 minutes. The cause is not established.</li>
+  </ul>
 </div>
 </section>
 
@@ -395,6 +426,8 @@ footer .l{font-family:var(--head);color:#fff;font-size:1.1rem}
     <tr><td>4. Mix RLN, 45 RLN nodes</td><td>#4647 stack + RLN</td><td class="n">65 / 4,082</td><td class="n">65 / 4,082</td><td class="n">not meaningful</td><td class="n">3,940</td></tr>
     <tr id="rln-row"><td>4b. Mix RLN, 22 RLN nodes</td><td>#4647 stack + RLN</td><td class="n">2,747 / 2,750</td><td class="n">2,748 / 2,750</td><td class="n">1,618 / 1,979 / 2,512 ms</td><td class="n">0</td></tr>
     <tr><td>5. Mix RLN, 22 RLN nodes</td><td>fourth train <code>27b59e17</code> + RLN</td><td class="n">2,750 / 2,750</td><td class="n">0 / 2,750</td><td class="n">1,005 / 1,654 / 2,649 ms</td><td class="n">0</td></tr>
+    <tr><td>6a. As 4b, pool from discovery</td><td>#4647 stack + RLN, <code>libp2p_module</code> without IP similarity</td><td class="n">266 / 2,116</td><td class="n">255 / 2,116</td><td class="n">not meaningful</td><td class="n">1,831</td></tr>
+    <tr><td>6b. As 5, pool from discovery</td><td>fourth train + RLN, <code>libp2p_module</code> without IP similarity</td><td class="n">2,653 / 2,694</td><td class="n">0 / 2,694</td><td class="n">990 / 4,283 ms / 22.1 s</td><td class="n">0</td></tr>
   </table></div>
 
   <h3>Runs 1 and 2: steady state, stack against master</h3>

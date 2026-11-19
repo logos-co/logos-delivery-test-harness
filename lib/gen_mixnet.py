@@ -18,6 +18,11 @@ pool (MIXNODES) and sends from the start, without waiting for discovery.
                              (`harness.sh start <group>...` brings them back)
   --count C --interval I --send-after A   per sender: C messages, one every I s
   --delivery-rev SHA         build logos-delivery at this commit (overrides.logos-delivery)
+  --delivery-flake URL       ... from this flake instead of the module's (a fork)
+  --libp2p-module-rev SHA    build libp2p_module at this commit (overrides.libp2p_module)
+  --libp2p-module-flake URL  ... from this flake
+  --discover                 no static pool: module mix nodes and senders learn the
+                             mix nodes from service discovery (needs --mix-kind module)
   --image NAME               the image of that build, e.g. logos-sim:pr4647
   --duration S               how long `run` and `suite` let it run
 """
@@ -52,9 +57,15 @@ def main():
     ap.add_argument("--interval", type=int, default=5)
     ap.add_argument("--send-after", type=int, default=120)
     ap.add_argument("--delivery-rev")
+    ap.add_argument("--delivery-flake")
+    ap.add_argument("--libp2p-module-flake")
+    ap.add_argument("--libp2p-module-rev")
+    ap.add_argument("--discover", action="store_true")
     ap.add_argument("--image")
     ap.add_argument("--duration", type=int)
     a = ap.parse_args()
+    if a.discover and a.mix_kind != "module":
+        ap.error("--discover needs --mix-kind module")
     if a.rln and a.mix_kind != "module":
         ap.error("--rln needs --mix-kind module: a logosdeliverynode has no LEZ RLN backend")
 
@@ -65,6 +76,8 @@ def main():
     rln_env = {"RLN": "1"} if a.rln else {}
     mix_rln_env = {**rln_env, "MIX_RLN": "1"} if a.rln else {}
     allow_env = {"MIX_ALLOW_ALL": "1"} if a.allow_all else {}
+    # An empty pool of its own keeps a node from being handed the manifest's.
+    pool_env = {"MIXNODES": ""} if a.discover else {}
 
     groups = [boot]
     for i in range(1, a.mix + 1):
@@ -80,7 +93,7 @@ def main():
         else:
             g.update(kind="delivery-module", nodekey=key(f"dht{i}"), config="mixnode.json.tpl",
                      env={"LOOKUP_INTERVAL": "15", "NODEKEY": key(f"node{i}"),
-                          "MIXKEY": key(f"mixkey{i}"), **allow_env, **mix_rln_env})
+                          "MIXKEY": key(f"mixkey{i}"), **allow_env, **mix_rln_env, **pool_env})
         if i > a.mix - a.stop:
             g["stopAfter"] = a.stop_at
         groups.append(g)
@@ -93,7 +106,7 @@ def main():
                    "config": "member-mix-static.json.tpl", "bootstraps": ["bootstrap"],
                    "env": {"LOOKUP_INTERVAL": "15", "ANONYMITY_LEVEL": "Required",
                            "SEND_COUNT": str(a.count), "SEND_INTERVAL": str(a.interval),
-                           "SEND_AFTER": str(a.send_after), **allow_env, **mix_rln_env}})
+                           "SEND_AFTER": str(a.send_after), **allow_env, **mix_rln_env, **pool_env}})
 
     out = {"_comment": ["generated: lib/gen_mixnet.py " + " ".join(sys.argv[1:])]}
     if a.image:
@@ -103,6 +116,12 @@ def main():
     out.update(module=base["module"], overrides=base["overrides"])
     if a.delivery_rev:
         out["overrides"]["logos-delivery"] = {"rev": a.delivery_rev}
+        if a.delivery_flake:
+            out["overrides"]["logos-delivery"]["flake"] = a.delivery_flake
+    if a.libp2p_module_rev:
+        out["overrides"]["libp2p_module"] = {"rev": a.libp2p_module_rev}
+        if a.libp2p_module_flake:
+            out["overrides"]["libp2p_module"]["flake"] = a.libp2p_module_flake
     if a.rln:
         out["rln"] = {}
     out["network"] = base["network"]

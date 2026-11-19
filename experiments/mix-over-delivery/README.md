@@ -40,6 +40,10 @@ build gives.
 | `mixnet-46-pr4647-churn` | 46 | #4647 stack | 62 min | 5 of 25 mix nodes stopped at 1400 s | PASS |
 | `mixnet-23-pr4647-rln` | 23 | #4647 stack + RLN | 62 min | Mix RLN: 12 module mix nodes, 4 senders | PASS |
 | `mixnet-23-train4-rln` | 23 | fourth train `27b59e17` + RLN | 62 min | run 5: the `mixnet-23-pr4647-rln` network on what replaces the #4647 stack | FAIL: 2,750/2,750 propagated and confirmed, p50 1.0 s, but every message is missing at its own exit node |
+| `mix-disco-rln-smoke-pr4647` | 9 | #4647 stack + RLN, `libp2p_module` `experiment/no-ipsim` | 15 min | pool from discovery with the IP-similarity term off: usable after 55 s | PASS |
+| `mixnet-23-pr4647-rln-disco` | 23 | the same | 62 min | run 6a: `mixnet-23-pr4647-rln` with the pool from discovery | FAIL, not valid: host saturated from the first send, `mix4` did not start |
+| `mixnet-23-train4-rln-disco` | 23 | fourth train `27b59e17` + RLN, `libp2p_module` `experiment/no-ipsim` | 62 min | run 6b: `mixnet-23-train4-rln` with the pool from discovery | FAIL: as run 5 for 48 min (exit-node miss), then host overload |
+| `mixnet-23-pr4729-rln` | 23 | #4729 `77547c6d9` on master `1183c3767` + RLN, plugin at its PR 32 (`538e3e42`) | 62 min | run 7: the `mixnet-23-pr4647-rln` network with coordination metadata in batches | FAIL: 2,736/2,736 propagated and confirmed, p50 1.6 s, 70% fewer coordination messages, but every message is missing at its own exit node |
 
 The #4647 stack is obsolete (REPORT.html, section 05). `mixnet-23-train4-rln`
 builds the tip of the fourth delivery train from the fork
@@ -64,5 +68,8 @@ run the five stopped nodes were brought back by hand at T0+2643 s:
   `MIX_ALLOW_ALL=1`), an option master does not know.
 - **A discovery-fed pool takes about 16.5 minutes to become usable**: mix is a
   node's second advertised service and registrars make it wait.
+  With `libp2p_module` built from `experiment/no-ipsim` (nim-libp2p
+  `ipSimCoefficient` 0) it takes about a minute. `lib/gen_mixnet.py --discover`
+  writes such a network.
 - **RLN scale**: on a 10-core docker VM, 22 RLN nodes with Mix RLN at 0.8
   messages per second fit; 45 at 1.6 per second saturate the host.
