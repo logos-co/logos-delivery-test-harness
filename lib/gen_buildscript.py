@@ -15,7 +15,7 @@ NIX_CONF = """mkdir -p /etc/nix
   echo "sandbox = false"
   echo "filter-syscalls = false"
   echo "extra-substituters = https://cache.nix.logos.co/public https://cache.nix.logos.co/ci"
-  echo "extra-trusted-public-keys = public:zaDAOkd+E3cQyFm9J7qejQYd9HoLJc1SJvnk68hNWeI= ci:aVJqjS4NWX5WfqHO0AEhIScjGu/JyK5FoydPrnEbMvc="
+  echo "extra-trusted-public-keys = public:zaDAOkd+E3cQyFm9J7qejQYd9HoLJc1SJvnk68hNWeI= ci:X+0FRwBzGnCKlopUJn2PR6xfiP2hnFAW90ruKaLumng="
   echo "fallback = true"
   # A cache that does not answer costs this long per lookup before nix builds
   # from source instead.
