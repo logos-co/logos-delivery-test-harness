@@ -9,7 +9,7 @@
     "Pinned to the logos-delivery commit this case was recorded on (overrides.logos-delivery);",
     "drop that override and the image to run it on what the module's lock names."
   ],
-  "image": "logos-sim:master-39b5f4ee-rln",
+  "image": "logos-sim:master-39b5f4ee-rln04",
   "duration": 420,
   "module": {
     "_comment": [
@@ -20,7 +20,7 @@
       "A branch is not a pin: out/resolved.json records the commit it resolved to."
     ],
     "flake": "git+https://github.com/logos-co/logos-delivery-module",
-    "ref": "master"
+    "ref": "feat/rln-registries-allocator-modes"
   },
   "overrides": {
     "_comment": [
@@ -30,7 +30,8 @@
       "logos-logoscore-cli is not the module's own input: its lock only carries",
       "copies pulled in by other inputs (libp2p_module, logos-test-modules), and",
       "its docker-compose runs yet another. The harness keeps running 665ac28b,",
-      "the version every recorded run used. `harness.sh resolve` shows each source."
+      "the version every recorded run used. `harness.sh resolve` shows each source.",
+      "libp2p_module v1.1.1: the RLN allocation client needs 1.1.0 or later."
     ],
     "logos-logoscore-cli": {
       "flake": "github:logos-co/logos-logoscore-cli",
@@ -38,6 +39,9 @@
     },
     "logos-delivery": {
       "rev": "39b5f4ee9b7712e8d5768414ca12ea3aeb7f1aa8"
+    },
+    "libp2p_module": {
+      "ref": "refs/tags/v1.1.1"
     }
   },
   "rln": {

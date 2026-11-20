@@ -6,9 +6,14 @@
 # sequencer spins at start-up under Rosetta on Apple silicon. The sequencer
 # executes its guest programs in-process (`prove`), from the ELFs the
 # repository ships, so neither that toolchain nor r0vm is needed here.
+#
+# The container sets a home up from /etc/sequencer_service/sequencer_config.json
+# (docker/lez.py writes it) and starts on it: a new chain every time it is created.
 FROM rust:1.98.1-slim-trixie AS builder
+# libpcsclite: the wallet behind the sequencer's stake commands links it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libssl-dev libclang-dev clang cmake ninja-build git curl unzip ca-certificates && \
+      build-essential pkg-config libssl-dev libclang-dev clang cmake ninja-build git curl unzip ca-certificates \
+      libpcsclite-dev && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
@@ -19,7 +24,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp target/release/sequencer_service /usr/local/bin/sequencer_service
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl libpcsclite1 && \
     rm -rf /var/lib/apt/lists/*
 RUN useradd -m -u 1000 -s /bin/bash sequencer_service_user && \
     mkdir -p /sequencer_service /etc/sequencer_service /var/lib/sequencer_service && \
@@ -27,7 +32,14 @@ RUN useradd -m -u 1000 -s /bin/bash sequencer_service_user && \
       /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
 COPY --from=builder /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
 ENV RUST_LOG=info
+# `start` reads these. The RPC otherwise listens on loopback only.
+ENV SEQUENCER_HOME=/var/lib/sequencer_service/home
+ENV SEQUENCER_RPC_LISTEN_ADDRESS=0.0.0.0:3040
+ENV SEQUENCER_METRICS_LISTEN_ADDRESS=0.0.0.0:9000
+# The key that pays the node's inscriptions on Bedrock; standalone has no
+# Bedrock, and this is the one LEZ's own local configs name.
+ENV FUNDING_PUBLIC_KEY=2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
 USER sequencer_service_user
 WORKDIR /sequencer_service
 EXPOSE 3040
-CMD ["sequencer_service", "/etc/sequencer_service/sequencer_config.json"]
+CMD ["sh", "-euc", "mkdir -p \"$SEQUENCER_HOME\"; sequencer_service setup \"$SEQUENCER_HOME\" --config /etc/sequencer_service/sequencer_config.json --funding-public-key \"$FUNDING_PUBLIC_KEY\" --create-channel; exec sequencer_service start \"$SEQUENCER_HOME\""]

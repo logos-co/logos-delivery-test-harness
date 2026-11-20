@@ -98,6 +98,9 @@ per component with `<PREFIX>_REF` (branch, tag or **full** 40-char sha) or
 | openmetrics-module | `OPENMETRICS_MODULE` | |
 | logos-logoscore-cli | `LOGOSCORE_CLI` | |
 | logos-delivery-demo | `DELIVERY_DEMO` | only for `delivery-demo` groups; default `main`, always built against the fleet's delivery_module |
+| rln_module | `RLN_MODULE` | only for RLN manifests, like the next two; default in `RLN_SOURCES` |
+| rln_lez_module | `RLN_LEZ_MODULE` | |
+| membership_allocation_client_module | `ALLOCATION_CLIENT_MODULE` | |
 
 For a PR, use its head commit, not its branch name:
 `gh pr view <n> --repo <owner/repo> --json headRefOid`. Pass the same variables
@@ -275,6 +278,10 @@ Lead with the verdict in one sentence, then:
 - **RLN runs** (`"rln"` section, `RLN=1`): only `delivery-module` nodes take part.
   The local chain needs about a minute before the first membership is active.
   In `delivery.txt`, "receptions of other messages" are Mix RLN coordination frames.
+  The RLN modules have repositories of their own (`RLN_SOURCES` in `lib/manifest.py`)
+  and reach the delivery module's build as input overrides.
+  `HARNESS_LOCAL_SRC=<dir>` builds them, the delivery module and logos-lez-rln
+  from local checkouts (`lib/local_sources.py`).
   RLN is CPU-heavy: on a 10-core docker VM, 22 RLN nodes with Mix RLN at 0.8
   messages per second used 4.3 cores, and 45 at 1.6 per second saturated the
   host (proofs took 9-10 s, 98 % of sends failed). Check `stats.tsv` before

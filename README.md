@@ -82,9 +82,9 @@ and each step is skipped or cached when its result exists.
 |---|---|---|
 | Resolve the module's flake lock | always | `out/resolved.json`: one flake reference per component |
 | `nix build` each component in the builder container | always (cached in the `logos-harness-nix` volume) | `out/logoscore`, `out/modules`, `out/seed-store` |
-| RLN modules (`liblogos_rln_module`, `liblogos_lez_rln_module`) | manifest has an `"rln"` section | copied into `out/modules` |
-| LEZ sequencer, from source | `"rln"` section, image missing | `logos-sim-lez-sequencer:local` |
-| logos-lez-rln tools and guest programs | `"rln"` section, `out/lez-tools` missing | `out/lez-tools`, `logos-sim-lez:local` |
+| RLN modules (`rln_module`, `rln_lez_module`, `membership_allocation_client_module`) | manifest has an `"rln"` section | copied into `out/modules` |
+| LEZ sequencer, from source | `"rln"` section, image missing | `logos-sim-lez-sequencer:<LEZ_REF>` |
+| logos-lez-rln tools and guest programs | `"rln"` section, `out/lez-tools/rev` is another commit | `out/lez-tools`, `logos-sim-lez:local` |
 | logos-delivery-demo | manifest has a `delivery-demo` group | rooted in the nix volume, `logos-sim-demo:local` |
 | Runtime image | unless `--no-image` | the manifest's `image` (default `logos-sim:local`) |
 
@@ -224,6 +224,9 @@ Every component takes `<PREFIX>_REF`, `<PREFIX>_REV` and `<PREFIX>_FLAKE`:
 | openmetrics-module | `OPENMETRICS_MODULE` |
 | logos-logoscore-cli | `LOGOSCORE_CLI` |
 | logos-delivery-demo (only for `delivery-demo` groups; default `main`, not from the module's lock) | `DELIVERY_DEMO` |
+| rln_module (only for [RLN](#rln-on-a-local-lez-chain) manifests, like the next two) | `RLN_MODULE` |
+| rln_lez_module | `RLN_LEZ_MODULE` |
+| membership_allocation_client_module | `ALLOCATION_CLIENT_MODULE` |
 
 ```bash
 DELIVERY_MODULE_REF=my-branch              ./harness.sh build   # branch
@@ -515,7 +518,7 @@ deploys an RLN registry on it; without the section nothing changes. A
 | Key / env | Default | Meaning |
 |---|---|---|
 | `rln.epochSizeSec`, `rln.maxEpochGap` | `10`, `3` | The RLN epoch and window of every node's preset. These are the Mix profile's; Mix RLN refuses to start on others. |
-| `rln.sequencerImage` | `logos-sim-lez-sequencer:local` | The standalone LEZ sequencer. The default is built by `harness.sh build`. |
+| `rln.sequencerImage` | `logos-sim-lez-sequencer:<LEZ_REF>` | The standalone LEZ sequencer. The default is built by `harness.sh build`. |
 | `RLN=1` | off | Relay RLN: the node validates proofs, registers a membership and attaches proofs to what it sends. |
 | `RLN_MEMBERSHIP=0` | `1` | No membership: the node validates, and its sends end in `messageError`. |
 | `RLN_VALIDATE=0` | `1` | Attach proofs without validating incoming ones. |
@@ -527,12 +530,32 @@ payer on request (`docker/lez.py`). A node with `RLN=1` waits for the registry,
 reaches RLN `Ready`, is funded, and starts once its membership is `active` --
 about a minute after T0 for the first nodes, so give `SEND_AFTER` no less than 30.
 
-`harness.sh build` with such a manifest also builds the two RLN modules, the
+`harness.sh build` with such a manifest also builds the RLN modules, the
 sequencer (from the logos-execution-zone source, tag `LEZ_REF`) and
-logos-lez-rln's tools. The first build takes over an hour; the results are kept
-(`out/lez-tools`, the images, the `logos-harness-lez-build` volume). Give an RLN
-manifest an `image` of its own: only an image built from such a manifest holds
-the RLN modules.
+logos-lez-rln's tools (commit `LEZ_RLN_REV`). The first build takes over an
+hour; the results are kept (`out/lez-tools`, the images, the
+`logos-harness-lez-build` volume). Give an RLN manifest an `image` of its own:
+only an image built from such a manifest holds the RLN modules.
+
+What an RLN manifest builds on:
+
+| Component | Source | Default |
+|---|---|---|
+| delivery module | the manifest's `module` | the manifest's `ref`: one that calls `rln_module` and names the three RLN modules as flake inputs |
+| `rln_module`, `rln_lez_module`, `membership_allocation_client_module` | their own repositories (`RLN_SOURCES` in `lib/manifest.py`); a manifest override or `RLN_MODULE_*`, `RLN_LEZ_MODULE_*`, `ALLOCATION_CLIENT_MODULE_*` replaces one | the ref named there |
+| `libp2p_module` | the manifest's override | the module's lock; the RLN examples name tag `v1.1.1` (the allocation client needs 1.1.0 or later) |
+
+A node pays for its own membership: its preset names no allocator.
+
+`HARNESS_LOCAL_SRC=<dir>` builds the delivery module, the three RLN modules and
+logos-lez-rln from local checkouts instead: each at the committed state of the
+ref above, or for logos-lez-rln of the commit it is on. Uncommitted changes are
+not built. `<dir>` holds the checkouts in the folder layout
+`lib/local_sources.py` lists.
+
+```sh
+HARNESS_LOCAL_SRC=<dir> HARNESS_MANIFEST=examples/rln-smoke.json ./harness.sh build
+```
 
 A mix node as a `delivery-module` node is a bootstrap-role group with
 `"config": "mixnode.json.tpl"` and `NODEKEY` / `MIXKEY` in its `env`; like the
@@ -704,6 +727,9 @@ Revisions, covered [above](#choosing-revisions-from-the-environment):
 | `OPENMETRICS_MODULE_REF` / `_REV` / `_FLAKE` | openmetrics-module |
 | `LOGOSCORE_CLI_REF` / `_REV` / `_FLAKE` | logos-logoscore-cli |
 | `DELIVERY_DEMO_REF` / `_REV` / `_FLAKE` | logos-delivery-demo (default `main`) |
+| `RLN_MODULE_REF` / `_REV` / `_FLAKE` | rln_module |
+| `RLN_LEZ_MODULE_REF` / `_REV` / `_FLAKE` | rln_lez_module |
+| `ALLOCATION_CLIENT_MODULE_REF` / `_REV` / `_FLAKE` | membership_allocation_client_module |
 
 How the harness itself runs:
 
@@ -713,7 +739,9 @@ How the harness itself runs:
 | `BUILDER_IMAGE` | `nixos/nix:2.24.9` | the container every nix command runs in |
 | `NIX_VOLUME` | `logos-harness-nix` | the docker volume holding the builder's nix store |
 | `IMAGE` | the manifest's `image` | the runtime image `build` produces and the nodes run |
-| `LEZ_REF` | `v0.3.2` | the logos-execution-zone tag the RLN sequencer is built from |
+| `LEZ_REF` | `v0.4.0-rc3` | the logos-execution-zone tag the RLN sequencer is built from |
+| `LEZ_RLN_REV` | `cf5e1f57…` | the logos-lez-rln commit the LEZ tools and guest programs are built from |
+| `HARNESS_LOCAL_SRC` | unset | a folder of checkouts: an RLN manifest builds the delivery module, the RLN modules and logos-lez-rln from them ([RLN](#rln-on-a-local-lez-chain)) |
 | `COLLECT_LOGS` | `flagged` | `all` keeps every container's log at `collect` |
 | `PYTHON` | `python3` | the interpreter for `lib/` |
 | `SUBNET` | `10.0.0.0/8` | the compose network, read by `docker-compose.yml` |

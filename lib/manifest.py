@@ -8,6 +8,8 @@ import os
 import re
 import sys
 
+import local_sources
+
 # Component -> the flake output to build. Keys are node names in the module's
 # flake lock, except "logos-delivery-module" which is the module itself.
 OUTPUTS = {
@@ -19,12 +21,34 @@ OUTPUTS = {
 }
 
 # Built on top of those for a manifest with an "rln" section: the RLN module
-# delivery_module calls, and the LEZ registry provider that one calls. Both are
-# nodes of the module's lock, like libp2p_module.
+# delivery_module calls (rln_module), the LEZ registry provider that one calls
+# (rln_lez_module), and the allocation client: rln_module depends on it and
+# does not load without that bundle.
 RLN_OUTPUTS = {
-    "liblogos_lez_rln_module": "install-portable",
-    "liblogos_rln_module": "install-portable",
+    "rln_lez_module": "install-portable",
+    "membership_allocation_client_module": "install-portable",
+    "rln_module": "install-portable",
 }
+# Each has a repository of its own. Unlike libp2p_module they are not derived
+# from the delivery module's lock: these are their sources unless a manifest
+# override or the environment says otherwise, and the delivery module's three
+# inputs are overridden with them (rln_input_overrides).
+RLN_SOURCES = {
+    "rln_lez_module": {"flake": "git+https://github.com/logos-co/logos-rln-lez-module", "ref": "main"},
+    "membership_allocation_client_module": {
+        "flake": "git+https://github.com/logos-co/logos-membership-allocation-client-module",
+        "ref": "main",
+    },
+    "rln_module": {"flake": "git+https://github.com/logos-co/logos-rln-module", "ref": "main"},
+}
+# rln_module's flake inputs among them: its own build is given the two built
+# here (lib/gen_buildscript.py).
+RLN_MODULE_INPUTS = {
+    "rln_module": ["rln_lez_module", "membership_allocation_client_module"],
+}
+
+# The logos-execution-zone tag the RLN sequencer is built from.
+LEZ_REF = os.environ.get("LEZ_REF") or "v0.4.0-rc3"
 
 MODULE = "logos-delivery-module"
     ## The one component that is a pin rather than a lock entry.
@@ -39,6 +63,9 @@ ENV_PREFIX = {
     "openmetrics-module": "OPENMETRICS_MODULE",
     "logos-logoscore-cli": "LOGOSCORE_CLI",
     "logos-delivery-demo": "DELIVERY_DEMO",
+    "rln_module": "RLN_MODULE",
+    "rln_lez_module": "RLN_LEZ_MODULE",
+    "membership_allocation_client_module": "ALLOCATION_CLIENT_MODULE",
 }
 
 INFRA_HOSTS = 256  # first addresses of the subnet: bootstraps, prometheus, grafana
@@ -206,6 +233,10 @@ def load(path):
 
     if not (mod.get("ref") or mod.get("rev")):
         mod["ref"] = "master"
+    # HARNESS_LOCAL_SRC: the same ref, of the local checkout.
+    local = local_sources.root() is not None and m.get("rln") is not None
+    if local:
+        mod["flake"] = local_sources.flake(MODULE)
 
     # The image `build` tags and the nodes run: one per build variant, so a
     # manifest that pins another logos-delivery does not replace the default.
@@ -226,7 +257,7 @@ def load(path):
         rln = m["rln"] = {k: v for k, v in m["rln"].items() if not k.startswith("_")}
         rln.setdefault("epochSizeSec", 10)
         rln.setdefault("maxEpochGap", 3)
-        rln.setdefault("sequencerImage", "logos-sim-lez-sequencer:local")
+        rln.setdefault("sequencerImage", sequencer_image())
 
     groups = m.get("groups") or []
     if not groups:
@@ -303,6 +334,12 @@ def load(path):
     for ov in overrides.values():
         if _is_sha(ov.get("ref") or "") and not ov.get("rev"):
             ov["rev"] = ov.pop("ref")
+    # The RLN modules: RLN_SOURCES, with the manifest's override applied on top.
+    if m.get("rln"):
+        for comp, src in RLN_SOURCES.items():
+            merged = dict(src)
+            _apply_pin(merged, overrides.get(comp) or {})
+            overrides[comp] = merged
     # Every other component takes its pin from the module's lock unless the
     # environment says otherwise, in which case that wins over the manifest too.
     for comp, prefix in ENV_PREFIX.items():
@@ -314,6 +351,10 @@ def load(path):
         merged = dict(overrides.get(comp) or {})
         _apply_pin(merged, pin)
         overrides[comp] = merged
+    # HARNESS_LOCAL_SRC: the RLN modules' refs, of the local checkouts.
+    if local:
+        for comp in RLN_SOURCES:
+            overrides[comp]["flake"] = local_sources.flake(comp)
     m["overrides"] = overrides
     return m
 
@@ -453,6 +494,30 @@ def _network(g):
 
 def lez_sequencer_url():
     return f"http://{LEZ_SEQUENCER_IP}:{LEZ_SEQUENCER_PORT}/"
+
+
+def sequencer_image():
+    """The sequencer `harness.sh build` builds: one image per LEZ tag."""
+    return f"logos-sim-lez-sequencer:{LEZ_REF}"
+
+
+def pinned(ov):
+    """The flake reference of an override that names its own flake."""
+    parts = [f"{k}={ov[k]}" for k in ("ref", "rev") if ov.get(k)]
+    if not parts:
+        return ov["flake"]
+    return ov["flake"] + ("&" if "?" in ov["flake"] else "?") + "&".join(parts)
+
+
+def rln_input_overrides(flakes):
+    """`--override-input` arguments that make the delivery module's flake use the
+    RLN modules built here. Its flake names the three as inputs of its own, and
+    rln_module's two follow them: three top-level overrides are the whole of it.
+    `flakes`: component -> flake reference, for the names in RLN_SOURCES."""
+    args = []
+    for name in RLN_SOURCES:
+        args += ["--override-input", name, flakes[name]]
+    return args
 
 
 def uses_rln(m):

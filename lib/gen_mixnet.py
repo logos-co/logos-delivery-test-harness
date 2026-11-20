@@ -38,6 +38,12 @@ def key(label):
     return f"{int(hashlib.sha256(label.encode()).hexdigest(), 16) % (N - 1) + 1:064x}"
 
 
+# What --rln puts in the manifest: the delivery module ref (one that calls
+# rln_module) and the libp2p_module override.
+RLN_MODULE_REF = "feat/rln-registries-allocator-modes"
+RLN_LIBP2P = {"ref": "refs/tags/v1.1.1"}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mix", type=int, default=25)
@@ -105,6 +111,8 @@ def main():
         out["overrides"]["logos-delivery"] = {"rev": a.delivery_rev}
     if a.rln:
         out["rln"] = {}
+        out["module"]["ref"] = RLN_MODULE_REF
+        out["overrides"]["libp2p_module"] = RLN_LIBP2P
     out["network"] = base["network"]
     out["groups"] = groups
     json.dump(out, sys.stdout, indent=2)

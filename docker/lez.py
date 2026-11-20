@@ -11,7 +11,7 @@ key (home/) stays with these two services; the sequencer mounts seq/ only, and
 the nodes pub/ only:
   seq/sequencer_config.json  the sequencer's config            (init)
   pub/registry-id            logos:local:<hex>, what a node's RLN preset names (setup)
-  pub/fund/<node>            written by a node: the LEZ account to fund
+  pub/fund/<node>            written by a node: the LEZ account to fund and its public key
   pub/funded/<node>          written here: "ok", or the error
 
 The recipe is logos-delivery-module's tests/e2e (conftest.py lez_registry).
@@ -29,10 +29,6 @@ HOME = f"{LEZ}/home"
 PUB = f"{LEZ}/pub"
 TOOLS = "/opt/lez-rln"
 SEQUENCER = os.environ.get("LEZ_RLN_SEQUENCER", "http://lez-sequencer:3040/")
-# LEZ's CLOCK_50 account and its clock shard, with the timestamp in ms at bytes
-# 8-16: 0 until block 50, and the registry refuses registrations until then.
-CLOCK_50 = "4BdcjoXkq786TMWcBGGHqcxeLYMZmn17rL4eM9ZyRWkX"
-CLOCK_SHARD = "2hwaRW8sMnyKLLRbDRw8k68tiv9bnfq98oxcdtcp157Z"
 GENESIS_BALANCE = 10**13
 FUNDING = int(os.environ.get("LEZ_FUNDING", 10**10))
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -46,7 +42,10 @@ def tool(name, *args, env=None):
     r = subprocess.run(
         [f"{TOOLS}/target/release/{name}", *args], cwd=TOOLS,
         capture_output=True, text=True,
-        env={**os.environ, "HOME": HOME, "LEE_WALLET_HOME_DIR": HOME, **(env or {})},
+        # SUPPRESS_VERBOSE_PRINTS: the wallet otherwise prints every transaction
+        # it sends, megabytes for a program deployment.
+        env={**os.environ, "HOME": HOME, "LEE_WALLET_HOME_DIR": HOME, "LEE_WALLET_PASSWORD": "",
+             "SUPPRESS_VERBOSE_PRINTS": "1", **(env or {})},
     )
     if r.returncode != 0:
         raise RuntimeError(f"{name} exited {r.returncode}: {(r.stdout + r.stderr)[-600:]}")
@@ -91,30 +90,37 @@ def b58(hex_id):
     return "1" * (len(raw) - len(raw.lstrip(b"\0"))) + out
 
 
-def fund(payer, account):
+def fund(payer, account, public_key):
     """Transfer FUNDING to `account` (hex, as a node's wallet reports it) and see
-    it arrive. fund_account returns once the transfer is submitted, and two
-    submitted within one block share the payer's nonce: the second is dropped."""
+    it arrive. The account has never been written, so the transfer names its
+    public key: a credit by account id lands only on an account that exists.
+    fund_account waits for the transfer's block and fails when it is not in one."""
+    error = None
     for attempt in range(1, 6):
-        tool("fund_account", "--to", account, "--amount", str(FUNDING),
-             env={"LEZ_RLN_PAYER": payer})
+        try:
+            tool("fund_account", "--to-public-key", public_key, "--amount", str(FUNDING),
+                 env={"LEZ_RLN_PAYER": payer})
+        except RuntimeError as e:
+            error = e
         for _ in range(20):
             if rpc("getAccountBalance", b58(account)) > 0:
                 return attempt
             time.sleep(0.5)
-    raise RuntimeError(f"no balance at {account} after 5 transfers")
+    raise RuntimeError(f"no balance at {account} after 5 transfers" + (f": {error}" if error else ""))
 
 
 def init():
     os.makedirs(HOME, exist_ok=True)
     os.makedirs(f"{LEZ}/seq", exist_ok=True)
-    payer = tool("mint_payer").split()[-1]
+    # mint_payer prints the account id, then its public key: genesis credits a key.
+    payer, public_key = tool("mint_payer").split()[:2]
     with open(f"{LEZ}/payer", "w") as f:
         f.write(payer)
-    # lez/sequencer/service/configs/docker/sequencer_config.json, with the payer
-    # as the only genesis account and 500 ms blocks, so CLOCK_50 ticks in ~25 s.
+    # lez/sequencer/service/networks/local.json, with the payer as the only
+    # genesis account and 500 ms blocks. The sequencer image sets a home up from
+    # this file; the Bedrock funding key is its --funding-public-key.
     config = {
-        "home": "/var/lib/sequencer_service",
+        "home": ".",
         "max_num_tx_in_block": 20,
         "mempool_max_size": 10000,
         "block_create_timeout": "500ms",
@@ -122,15 +128,20 @@ def init():
         "bedrock_config": {
             "channel_id": "01" * 32,
             "node_url": "http://host.docker.internal:18080",
-            "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26",
+        },
+        "genesis": {
             "channel_params": {
                 "minimum_sequencer_stake": 149,
                 "posting_timeframe": 300,
                 "posting_timeout": 25,
                 "exit_delay": 100,
+                "max_block_size": 1048576,
             },
+            "actions": [{"supply_account": {
+                "recipient": {"identified": {"key": public_key}},
+                "balance": GENESIS_BALANCE,
+            }}],
         },
-        "genesis": [{"supply_account": {"account_id": payer, "balance": GENESIS_BALANCE}}],
     }
     with open(f"{LEZ}/seq/sequencer_config.json", "w") as f:
         json.dump(config, f)
@@ -149,11 +160,6 @@ def init():
     log("payer", payer, "minted; sequencer config written")
 
 
-def clock_ms():
-    shard = rpc("getAccount", CLOCK_50)["data"]["shards"].get(CLOCK_SHARD, [])
-    return int.from_bytes(bytes(shard[8:16]), "little")
-
-
 def setup():
     with open(f"{LEZ}/payer") as f:
         payer = f.read().strip()
@@ -167,25 +173,27 @@ def setup():
     if not account:
         sys.exit(f"[harness lez] FAILED: run_setup printed no config account:\n{out[-600:]}")
     registry = f"logos:local:{b58_hex(account)}"
-    wait("CLOCK_50 never ticked", lambda: clock_ms() > 0, 180)
     os.makedirs(f"{PUB}/fund", exist_ok=True)
     os.makedirs(f"{PUB}/funded", exist_ok=True)
     # Published last: a node that reads it can ask for funding at once.
     with open(f"{PUB}/registry-id.tmp", "w") as f:
         f.write(registry)
     os.rename(f"{PUB}/registry-id.tmp", f"{PUB}/registry-id")
-    log("registry", registry, "deployed; CLOCK_50 live; funding on request")
+    log("registry", registry, "deployed; funding on request")
     while True:
         for node in sorted(os.listdir(f"{PUB}/fund")):
             done = f"{PUB}/funded/{node}"
             if node.endswith(".tmp") or os.path.exists(done):
                 continue
             with open(f"{PUB}/fund/{node}") as f:
-                account = f.read().strip()
-            if not account:
+                request = f.read().split()
+            if not request:
                 continue  # the node is still writing it
+            account = request[0]
             try:
-                attempts = fund(payer, account)
+                if len(request) < 2:
+                    raise ValueError("the request names no public key")
+                attempts = fund(payer, account, request[1])
                 result = "ok"
                 log("funded", node, account, f"(transfer {attempts})" if attempts > 1 else "")
             except (RuntimeError, OSError, KeyError, ValueError) as e:

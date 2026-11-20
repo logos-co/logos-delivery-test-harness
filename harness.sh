@@ -34,7 +34,12 @@
 #   IMAGE              runtime image to build and run, over the manifest's
 #                      "image"                  (default: logos-sim:local)
 #   LEZ_REF            logos-execution-zone tag the RLN sequencer is built from
-#                                               (default: v0.3.2)
+#                                               (default: v0.4.0-rc3)
+#   LEZ_RLN_REV        logos-lez-rln commit the LEZ tools are built from
+#                                               (default: cf5e1f57)
+#   HARNESS_LOCAL_SRC  folder holding checkouts of the RLN stack (lib/local_sources.py):
+#                      an RLN manifest then builds the delivery module, the RLN
+#                      modules and logos-lez-rln from those, at their committed state
 #   PYTHON             interpreter              (default: python3)
 #:end
 set -euo pipefail
@@ -43,12 +48,21 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MANIFEST=${HARNESS_MANIFEST:-$here/harness.json}
 BUILDER_IMAGE=${BUILDER_IMAGE:-nixos/nix:2.24.9}
 NIX_VOLUME=${NIX_VOLUME:-logos-harness-nix}
-LEZ_REF=${LEZ_REF:-v0.3.2}
+LEZ_RLN_REV=${LEZ_RLN_REV:-cf5e1f578a05fe5a66d845597c83c62b224aa19c}
 PY=${PYTHON:-python3}
 
 out=$here/out
 mkdir -p "$out/traces"
 export PYTHONPATH="$here/lib"
+# The default is lib/manifest.py's: the sequencer image is named after it.
+LEZ_REF=$($PY -c "import manifest;print(manifest.LEZ_REF)")
+
+# HARNESS_LOCAL_SRC: mounts for the nix builder.
+local_mounts=()
+if [ -n "${HARNESS_LOCAL_SRC:-}" ]; then
+  mounts=$($PY "$here/lib/local_sources.py" mounts) || exit 1
+  while IFS= read -r line; do local_mounts+=("$line"); done <<<"$mounts"
+fi
 
 # The manifest names its image; IMAGE in the environment wins (lib/manifest.py).
 image() { $PY -c "import manifest;print(manifest.image(manifest.load('${1:-$MANIFEST}')))"; }
@@ -76,16 +90,28 @@ dc() {
 }
 
 cmd_resolve() {
-  local flake
+  local flake overrides
   flake=$($PY -c "import manifest;print(manifest.module_flake(manifest.load('$MANIFEST')))")
+  # An RLN manifest: the RLN modules the delivery module is built against. Its
+  # lock may not name them at all, and then nix cannot read the flake's metadata
+  # without them.
+  overrides=$($PY -c "
+import manifest, shlex
+m = manifest.load('$MANIFEST')
+flakes = {k: manifest.pinned(m['overrides'][k]) for k in manifest.RLN_SOURCES} if manifest.uses_rln(m) else {}
+print(' '.join(shlex.quote(a) for a in manifest.rln_input_overrides(flakes)) if flakes else '')")
   log "reading the flake lock of $flake"
-  docker run --rm -v "$NIX_VOLUME:/nix" -v "$out:/out" "$BUILDER_IMAGE" sh -euc "
-    mkdir -p /etc/nix
-    echo 'experimental-features = nix-command flakes' > /etc/nix/nix.conf
+  {
+    echo "mkdir -p /etc/nix"
+    echo "echo 'experimental-features = nix-command flakes' > /etc/nix/nix.conf"
+    $PY "$here/lib/local_sources.py" prelude
+    $PY -c "import gen_buildscript; print(gen_buildscript.FETCH_SETUP, end='')"
     # --no-write-lock-file: a remote flake whose own lock is not fully pinned
     # would otherwise be updated in place, which nix cannot do and we do not want.
-    nix flake metadata --json --no-write-lock-file '$flake' > /out/lock.json
-  "
+    echo "nix flake metadata --json --no-write-lock-file $overrides '$flake' > /out/lock.json"
+  } > "$out/resolve-inside.sh"
+  docker run --rm -v "$NIX_VOLUME:/nix" -v "$out:/out" ${local_mounts[@]+"${local_mounts[@]}"} \
+    "$BUILDER_IMAGE" sh -euc 'sh -eu /out/resolve-inside.sh'
   $PY "$here/lib/resolve.py" "$MANIFEST" "$out/lock.json" "$out/resolved.json"
 }
 
@@ -96,6 +122,7 @@ cmd_build() {
   docker run --rm \
     -v "$NIX_VOLUME:/nix" \
     -v "$out:/out" \
+    ${local_mounts[@]+"${local_mounts[@]}"} \
     "$BUILDER_IMAGE" sh -euc 'sh /out/build-inside.sh'
   local demo image
   image=$(image)
@@ -118,32 +145,41 @@ cmd_build() {
 }
 
 # What an RLN run adds to the nix builds: the local LEZ chain. Each piece is
-# built once and kept; remove the image (or out/lez-tools) to build it again.
+# built once and kept: the sequencer image per LEZ tag, the tools per
+# logos-lez-rln commit (out/lez-tools/rev).
 build_lez() {
-  local seq
+  local seq src lezrln rev
   seq=$($PY -c "import manifest;print(manifest.load('$MANIFEST')['rln']['sequencerImage'])")
   # The standalone sequencer, from source for this host's platform (see
   # docker/Dockerfile.lez-sequencer). A manifest naming another image brings its own.
-  if [ "$seq" = logos-sim-lez-sequencer:local ] && ! docker image inspect "$seq" >/dev/null 2>&1; then
+  if [ "$seq" = "logos-sim-lez-sequencer:$LEZ_REF" ] && ! docker image inspect "$seq" >/dev/null 2>&1; then
     log "docker build $seq from logos-execution-zone $LEZ_REF"
-    [ -d "$out/lez-src/logos-execution-zone/.git" ] ||
+    src=$out/lez-src/$LEZ_REF/logos-execution-zone
+    [ -d "$src/.git" ] ||
       git clone -q --depth 1 --branch "$LEZ_REF" \
-        https://github.com/logos-blockchain/logos-execution-zone.git "$out/lez-src/logos-execution-zone"
-    docker build -t "$seq" -f "$here/docker/Dockerfile.lez-sequencer" "$out/lez-src/logos-execution-zone"
+        https://github.com/logos-blockchain/logos-execution-zone.git "$src"
+    docker build -t "$seq" -f "$here/docker/Dockerfile.lez-sequencer" "$src"
   fi
   # logos-lez-rln's guest programs and tools (docker/build-lez.sh): the guest
   # programs as linux/amd64, with the docker socket; the tools natively.
-  if [ ! -x "$out/lez-tools/lez-rln/target/release/run_setup" ]; then
-    local platform
+  # HARNESS_LOCAL_SRC: at the local checkout's HEAD.
+  lezrln=$($PY "$here/lib/local_sources.py" lez-rln)
+  rev=$LEZ_RLN_REV
+  [ -n "$lezrln" ] && rev=$(git -C "$lezrln" rev-parse HEAD)
+  if [ "$(cat "$out/lez-tools/rev" 2>/dev/null)" != "$rev" ]; then
+    local platform step
     for platform in linux/amd64 ""; do
-      log "building logos-lez-rln's ${platform:+guest programs ($platform)}${platform:-tools}"
+      step=tools; [ -n "$platform" ] && step=guest
+      log "building logos-lez-rln's $step${platform:+ programs ($platform)} at $rev"
       docker build -q ${platform:+--platform $platform} -t logos-sim-lez-build:local \
         -f "$here/docker/Dockerfile.lez-build" "$here/docker"
       docker run --rm ${platform:+--platform $platform} \
         -v logos-harness-lez-build:/work -v "$out:/out" \
         -v "$here/docker/build-lez.sh:/build-lez.sh:ro" \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        logos-sim-lez-build:local bash /build-lez.sh "${platform:+guest}${platform:-tools}"
+        -e LEZ_RLN_REV="$rev" \
+        ${lezrln:+-v "$lezrln:/src/logos-lez-rln:ro" -e LEZ_RLN_LOCAL=/src/logos-lez-rln} \
+        logos-sim-lez-build:local bash /build-lez.sh "$step"
     done
   fi
   log "docker build logos-sim-lez:local"
