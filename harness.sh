@@ -136,14 +136,14 @@ build_lez() {
   if [ ! -x "$out/lez-tools/lez-rln/target/release/run_setup" ]; then
     local platform
     for platform in linux/amd64 ""; do
-      log "building logos-lez-rln's ${platform:+guest programs ($platform)}${platform:-tools}"
+      log "building logos-lez-rln's $([ -n "$platform" ] && echo "guest programs ($platform)" || echo tools)"
       docker build -q ${platform:+--platform $platform} -t logos-sim-lez-build:local \
         -f "$here/docker/Dockerfile.lez-build" "$here/docker"
       docker run --rm ${platform:+--platform $platform} \
         -v logos-harness-lez-build:/work -v "$out:/out" \
         -v "$here/docker/build-lez.sh:/build-lez.sh:ro" \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        logos-sim-lez-build:local bash /build-lez.sh "${platform:+guest}${platform:-tools}"
+        logos-sim-lez-build:local bash /build-lez.sh "$([ -n "$platform" ] && echo guest || echo tools)"
     done
   fi
   log "docker build logos-sim-lez:local"
