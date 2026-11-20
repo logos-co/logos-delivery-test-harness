@@ -38,6 +38,11 @@ mixnodes=""
 # an older one refuses the unknown key.
 mixallow=""
 [ "${MIX_ALLOW_ALL:-0}" = 1 ] && mixallow='"mix-allow-all-addresses": true,'
+# MIX_KEY_ROTATION=1: the node generates and rotates its mix key and takes mix
+# keys from discovery only; MIXKEY and MIXNODES are then ignored. Set it on
+# every node that runs Mix, or on none. Needs logos-delivery#4812.
+mixrotation=""
+[ "${MIX_KEY_ROTATION:-0}" = 1 ] && mixrotation='"mix-key-rotation": true,'
 # RLN=1: Relay RLN on the registry the lez-setup service deployed on the local
 # LEZ chain (a manifest with an "rln" section). RLN has no config key: it comes
 # from the presets file, whose one entry replaces the module's built-in settings
@@ -85,6 +90,7 @@ mixrln=""
 [ "${MIX_RLN:-0}" = 1 ] && mixrln="\"mix-rln-registry-id\": \"${mixregistry:-}\", \"mix-rln-metadata-topic\": \"${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}\","
 sed -e "s|@IP@|$IP|g" -e "s|@BOOTSTRAPS@|$bootstraps|g" -e "s|@LOOKUP@|$LOOKUP|g" \
     -e "s|@MIX_ALLOW_ALL@|$mixallow|g" -e "s|@MIX_RLN@|$mixrln|g" \
+    -e "s|@MIX_KEY_ROTATION@|$mixrotation|g" \
     -e "s|@NODEKEY@|${NODEKEY:-}|g" -e "s|@MIXKEY@|${MIXKEY:-}|g" \
     -e "s|@MIXNODES@|$mixnodes|g" -e "s|@ANONYMITY@|${ANONYMITY_LEVEL:-Preferred}|g" \
     -e "s|@CLUSTER@|$CLUSTER_ID|g" -e "s|@SHARDS@|$NUM_SHARDS|g" \
