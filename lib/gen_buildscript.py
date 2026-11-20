@@ -7,6 +7,7 @@ already substituted. Everything the container does is `nix build`.
 import json
 import sys
 
+import local_sources
 import manifest
 
 NIX_CONF = """mkdir -p /etc/nix
@@ -23,11 +24,17 @@ NIX_CONF = """mkdir -p /etc/nix
 } > /etc/nix/nix.conf
 """
 
+# nix's git cache is kept in the store volume, so it survives between runs.
+# HTTP/1.1: a large pack over HTTP/2 from inside Docker fails mid-transfer.
+FETCH_SETUP = """export XDG_CACHE_HOME=/nix/.cache
+git config --system http.version HTTP/1.1
+"""
+
 # Components whose `modules/` directory is copied into the image's module dir.
 # The RLN ones are resolved only for a manifest with an "rln" section.
 MODULE_COMPONENTS = [
     "libp2p_module", "openmetrics-module",
-    "liblogos_lez_rln_module", "liblogos_rln_module",
+    "rln_lez_module", "membership_allocation_client_module", "rln_module",
     "logos-delivery-module",
 ]
 
@@ -70,7 +77,7 @@ def demo_builds(comps, lines):
 
 def generate(resolved, out_path):
     comps = resolved["components"]
-    lines = ["set -euo pipefail", NIX_CONF]
+    lines = ["set -euo pipefail", NIX_CONF, local_sources.prelude(), FETCH_SETUP]
 
     def build(key, link, extra=""):
         c = comps[key]
@@ -99,40 +106,57 @@ def generate(resolved, out_path):
         return f'--override-input logos-delivery "{dv["flake"]}" '
 
     build("logos-logoscore-cli", "/tmp/r-core")
-    def lez_override():
-        """Build liblogos_rln_module against the liblogos_lez_rln_module built here.
+    def rln_overrides():
+        """Build rln_module against the RLN modules built here.
 
-        Its flake names that input by branch, so a standalone build would take
-        whatever the branch points at today and compile a second LEZ wallet for
-        it. The delivery module's flake pins the input the same way.
+        Its flake names rln_lez_module and the allocation client by branch, so
+        a standalone build would take whatever the branches point at today and
+        compile a second LEZ wallet for it.
         """
-        return f'--override-input liblogos_lez_rln_module "{comps["liblogos_lez_rln_module"]["flake"]}" '
+        return "".join(
+            f'--override-input {name} "{comps[name]["flake"]}" '
+            for name in manifest.RLN_MODULE_INPUTS["rln_module"]
+        )
 
     modules = [k for k in MODULE_COMPONENTS if k in comps]
     for i, key in enumerate(modules):
-        extra = delivery_override() if key == "logos-delivery-module" else ""
-        if key == "liblogos_rln_module":
-            extra = lez_override()
+        extra = ""
+        if key == "logos-delivery-module":
+            extra = delivery_override()
+            if "rln_module" in comps:
+                # The delivery module names the three RLN modules as inputs.
+                flakes = {k: c["flake"] for k, c in comps.items()}
+                extra += "".join(f'{a} ' if a.startswith("--") or a in manifest.RLN_SOURCES else f'"{a}" '
+                                 for a in manifest.rln_input_overrides(flakes))
+        if key == "rln_module":
+            extra = rln_overrides()
         build(key, f"/tmp/r-{i}", extra)
     build("logos-delivery", "/tmp/r-seed")
     if manifest.DEMO in comps:
         demo_builds(comps, lines)
 
+    # Collected in the container first and made writable there: store paths are
+    # read-only, and a read-only directory created straight in /out cannot be
+    # filled when /out is a bind mount written as the host's user (Docker Desktop).
+    stage = "/tmp/stage"
     lines += [
         'echo "--- collecting into /out"',
         "chmod -R u+w /out/logoscore /out/modules /out/seed-store 2>/dev/null || true",
         "rm -rf /out/logoscore /out/modules /out/seed-store",
-        "cp -rL /tmp/r-core /out/logoscore",
-        "mkdir -p /out/modules",
-        "cp -rL /tmp/r-core/modules/. /out/modules/",
+        f"rm -rf {stage}; mkdir -p {stage}",
+        f"cp -rL /tmp/r-core {stage}/logoscore",
+        f"mkdir -p {stage}/modules",
+        f"cp -rL /tmp/r-core/modules/. {stage}/modules/",
     ]
     for i, _ in enumerate(modules):
-        lines.append(f"cp -rL /tmp/r-{i}/modules/. /out/modules/")
+        lines.append(f"cp -rL /tmp/r-{i}/modules/. {stage}/modules/")
     lines += [
-        "mkdir -p /out/seed-store",
-        'for p in $(nix path-info -r /tmp/r-seed); do cp -a "$p" /out/seed-store/; done',
+        f"mkdir -p {stage}/seed-store",
+        f'for p in $(nix path-info -r /tmp/r-seed); do cp -a "$p" {stage}/seed-store/; done',
+        f"chmod -R u+w {stage}",
+        f"cp -a {stage}/logoscore {stage}/modules {stage}/seed-store /out/",
+        f"rm -rf {stage}",
         "readlink -f /tmp/r-seed > /out/seed-path",
-        "chmod -R u+w /out/logoscore /out/modules /out/seed-store",
         'echo "modules:"; ls /out/modules',
         'echo "seed: $(cat /out/seed-path)  closure: $(du -sh /out/seed-store | cut -f1)"',
     ]
