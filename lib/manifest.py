@@ -89,7 +89,15 @@ NATIVE = "logosdeliverynode"  # the delivery node binary, in-process kademlia
 MODULE_NODE = "delivery-module"  # logoscore + delivery_module + libp2p_module
 DEMO_NODE = "delivery-demo"  # the logos-delivery-demo UI, viewable over noVNC
 AGENT_NODE = "sd-agent"  # logoscore + libp2p_module only, driven by docker/sd_agent.py
-KINDS = (NATIVE, MODULE_NODE, DEMO_NODE, AGENT_NODE)
+# logoscore + libp2p_module + the LEZ registry provider + the RLN membership
+# allocator (docker/entrypoint-allocator.sh): registers memberships for the
+# RLN nodes from its own payer. Needs rln.allocator in the manifest.
+ALLOCATOR_NODE = "rln-allocator"
+KINDS = (NATIVE, MODULE_NODE, DEMO_NODE, AGENT_NODE, ALLOCATOR_NODE)
+# The allocator's module. Not an input of the delivery module: rln.allocator
+# pins it ({"rev": <sha>}, optionally "flake").
+ALLOCATOR_MODULE = "membership_allocation_module"
+ALLOCATOR_FLAKE = "github:logos-co/logos-membership-allocation-module"
 DEFAULT_KIND = {"bootstrap": NATIVE, "member": MODULE_NODE}
 
 # Ports inside every container. A native node listens on its tcp port and is
@@ -256,6 +264,13 @@ def load(path):
         suffix = LEZ_VERSIONS[rln["lezVersion"]]["suffix"]
         rln.setdefault("sequencerImage", "logos-sim-lez-sequencer:" + (suffix or "local"))
         rln.setdefault("toolsImage", "logos-sim-lez:" + (suffix or "local"))
+        # allocator: memberships come from an rln-allocator node, not from each
+        # node's own funded payer.
+        if rln.get("allocator") is not None:
+            alloc = rln["allocator"]
+            alloc.setdefault("flake", ALLOCATOR_FLAKE)
+            if not _is_sha(alloc.get("rev") or ""):
+                _fail("rln.allocator needs \"rev\": the full commit of the allocator module")
 
     groups = m.get("groups") or []
     if not groups:
@@ -323,6 +338,10 @@ def load(path):
                 _fail(f"group '{g['name']}': env RLN=1 needs an \"rln\" section in the manifest")
             if g["kind"] != MODULE_NODE:
                 _fail(f"group '{g['name']}': RLN runs on {MODULE_NODE} nodes only")
+        if g["kind"] == ALLOCATOR_NODE and not uses_allocator(m):
+            _fail(f"group '{g['name']}': an {ALLOCATOR_NODE} node needs rln.allocator in the manifest")
+    if uses_allocator(m) and not any(g["kind"] == ALLOCATOR_NODE for g in groups):
+        _fail(f"rln.allocator needs a group of kind {ALLOCATOR_NODE}")
 
     # Overrides carry a _comment key for humans; drop it.
     overrides = {
@@ -488,6 +507,11 @@ def uses_rln(m):
     """A manifest with an "rln" section runs a local LEZ chain with an RLN
     registry on it, and builds the RLN modules into the image."""
     return bool(m.get("rln"))
+
+
+def uses_allocator(m):
+    """Whether the RLN nodes ask an rln-allocator node for their memberships."""
+    return bool((m.get("rln") or {}).get("allocator"))
 
 
 def outputs(m):

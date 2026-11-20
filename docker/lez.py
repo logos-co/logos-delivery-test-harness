@@ -11,7 +11,8 @@ key (home/) stays with these two services; the sequencer mounts seq/ only, and
 the nodes pub/ only:
   seq/sequencer_config.json  the sequencer's config            (init)
   pub/registry-id            logos:local:<hex>, what a node's RLN preset names (setup)
-  pub/fund/<node>            written by a node: the LEZ account to fund
+  pub/fund/<node>            written by a node: the LEZ account to fund, then
+                             optionally the amount
   pub/funded/<node>          written here: "ok", or the error
 
 The recipe is logos-delivery-module's tests/e2e (conftest.py lez_registry).
@@ -100,8 +101,8 @@ def b58(hex_id):
     return "1" * (len(raw) - len(raw.lstrip(b"\0"))) + out
 
 
-def fund(payer, account):
-    """Transfer FUNDING to `account` (hex, as a node's wallet reports it) and see
+def fund(payer, account, amount=FUNDING):
+    """Transfer `amount` to `account` (hex, as a node's wallet reports it) and see
     it arrive. fund_account returns once the transfer is submitted, and two
     submitted within one block share the payer's nonce: the second is dropped.
 
@@ -109,11 +110,11 @@ def fund(payer, account):
     never written is credited only by a transfer that presents its key. There
     fund_account itself waits for the transfer's outcome and fails otherwise."""
     if V04:
-        tool("fund_account", "--to-public-key", account, "--amount", str(FUNDING),
+        tool("fund_account", "--to-public-key", account, "--amount", str(amount),
              env={"LEZ_RLN_PAYER": payer})
         return 1
     for attempt in range(1, 6):
-        tool("fund_account", "--to", account, "--amount", str(FUNDING),
+        tool("fund_account", "--to", account, "--amount", str(amount),
              env={"LEZ_RLN_PAYER": payer})
         for _ in range(20):
             if rpc("getAccountBalance", b58(account)) > 0:
@@ -247,13 +248,17 @@ def setup():
             if node.endswith(".tmp") or os.path.exists(done):
                 continue
             with open(f"{PUB}/fund/{node}") as f:
-                account = f.read().strip()
-            if not account:
+                request = f.read().split()
+            if not request:
                 continue  # the node is still writing it
+            # "<account>", or "<account> <amount>" (an rln-allocator, which
+            # pays for every node's registrations).
+            account = request[0]
             try:
-                attempts = fund(payer, account)
+                amount = int(request[1]) if len(request) > 1 else FUNDING
+                attempts = fund(payer, account, amount)
                 result = "ok"
-                log("funded", node, account, f"(transfer {attempts})" if attempts > 1 else "")
+                log("funded", node, account, amount, f"(transfer {attempts})" if attempts > 1 else "")
             except (RuntimeError, OSError, KeyError, ValueError) as e:
                 result = str(e)
                 log("FAILED funding", node, account, result)

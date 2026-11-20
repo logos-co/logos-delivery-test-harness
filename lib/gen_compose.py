@@ -19,6 +19,7 @@ import sys
 import manifest
 from manifest import (
     AGENT_NODE,
+    ALLOCATOR_NODE,
     DEMO_NODE,
     DEMO_VNC_PORT,
     MODULE_METRICS_PORT,
@@ -124,6 +125,9 @@ def _module_service(g, name, ip, net_conf, join, depends_on, image, rln=None):
         if rln.get("mixRegistry"):
             env.setdefault("RLN_MIX_REGISTRY", "1")
         env.setdefault("LEZ_VERSION", rln["lezVersion"])
+        if rln.get("allocator"):
+            # Memberships from the rln-allocator node: no funding of this node.
+            env.setdefault("RLN_ALLOCATOR", "1")
         lez_volume = "\n      - ./out/lez/pub:/lez"
     envblock = "\n".join(f"      {k}: \"{v}\"" for k, v in env.items())
     health = ""
@@ -194,10 +198,17 @@ def _lez_services(rln):
     ]
 
 
-def _agent_service(g, name, ip, join, depends_on, index, image):
+def _agent_service(g, name, ip, join, depends_on, index, image, rln=None):
     """An sd-agent: a logoscore daemon hosting only libp2p_module, driven by
     docker/sd_agent.py through the module's service-discovery API. `index` is
-    the node's 1-based position in its group ({i} in the SD_* env)."""
+    the node's 1-based position in its group ({i} in the SD_* env).
+
+    An rln-allocator is the same daemon with the LEZ registry provider and the
+    allocator module on top (docker/entrypoint-allocator.sh); `rln` is then
+    the manifest's rln section."""
+    allocator = g["kind"] == ALLOCATOR_NODE
+    entrypoint = "entrypoint-allocator.sh" if allocator else "entrypoint-agent.sh"
+    lez_volume = ""
     env = {
         "BOOTSTRAP_ADDR": join,
         "START_JITTER": str(g["jitter"]),
@@ -206,6 +217,12 @@ def _agent_service(g, name, ip, join, depends_on, index, image):
         "GROUP_NAME": g["name"],
         "GROUP_INDEX": str(index),
     }
+    if allocator:
+        env["LEZ_RLN_SEQUENCER"] = manifest.lez_sequencer_url()
+        env["LEZ_VERSION"] = rln["lezVersion"]
+        if rln.get("mixRegistry"):
+            env["RLN_MIX_REGISTRY"] = "1"
+        lez_volume = "\n      - ./out/lez/pub:/lez"
     if g["role"] == "bootstrap":
         env["LIBP2P_PRIVKEY"] = manifest.libp2p_privkey(g)
     env.update({k: str(v) for k, v in g["env"].items()})
@@ -226,11 +243,11 @@ def _agent_service(g, name, ip, join, depends_on, index, image):
       harness.group: "{g['name']}"
       harness.role: "{g['role']}"
       harness.kind: "{g['kind']}"
-    entrypoint: ["/opt/sim/entrypoint-agent.sh"]
+    entrypoint: ["/opt/sim/{entrypoint}"]
     environment:
 {envblock}
 {_depends(depends_on)}    volumes:
-      - ./out/traces:/traces
+      - ./out/traces:/traces{lez_volume}
     networks:
       sim:
         ipv4_address: {ip}
@@ -332,8 +349,8 @@ def generate(m, compose_path, targets_path, plan_path):
             join, dep = ("", "") if g is first else (dht_entry, first["name"])
             if g["kind"] == NATIVE:
                 services.append(_native_service(g, name, ip, g["port"], net_conf, join, dep, image))
-            elif g["kind"] == AGENT_NODE:
-                services.append(_agent_service(g, name, ip, join, dep, 1, image))
+            elif g["kind"] in (AGENT_NODE, ALLOCATOR_NODE):
+                services.append(_agent_service(g, name, ip, join, dep, 1, image, rln))
             else:
                 services.append(_module_service(g, name, ip, net_conf, join, dep, image, rln))
             targets.append(_target(g, name, ip))
@@ -370,8 +387,8 @@ def generate(m, compose_path, targets_path, plan_path):
                     )
                     names.append(name)
                     continue
-                elif g["kind"] == AGENT_NODE:
-                    services.append(_agent_service(g, name, ip, join, dep, index, image))
+                elif g["kind"] in (AGENT_NODE, ALLOCATOR_NODE):
+                    services.append(_agent_service(g, name, ip, join, dep, index, image, rln))
                 else:
                     services.append(_module_service(g, name, ip, net_conf, join, dep, image, rln))
                 targets.append(_target(g, name, ip))

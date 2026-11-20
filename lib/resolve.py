@@ -153,6 +153,15 @@ def resolve(m, lock_path, out_path):
             "source": "module-lock",
         }
 
+    if manifest.uses_allocator(m):
+        # The serving side: its own repository, pinned by the manifest.
+        alloc = m["rln"]["allocator"]
+        resolved[manifest.ALLOCATOR_MODULE] = {
+            "flake": _compose(alloc["flake"], alloc["rev"]),
+            "output": manifest.RLN_OUTPUT,
+            "source": "manifest",
+        }
+
     if manifest.uses_demo(m):
         # Not an input of the module: its own source, main unless overridden.
         # build records the commit a branch resolved to (out/demo-paths.json).

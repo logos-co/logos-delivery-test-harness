@@ -96,14 +96,25 @@ if [ "${RLN:-0}" = 1 ]; then
       fundto=$(grep -oE 'payer_public_key[^A-Za-z0-9]+[A-Za-z0-9]+' /tmp/poll.out | grep -oE '[A-Za-z0-9]+$' | head -1)
       [ -n "$fundto" ] || { log "LEZ wallet reports no payer public key"; kill $DAEMON; exit 1; }
     fi
-    echo "$fundto" > "/lez/fund/$(hostname).tmp" && mv "/lez/fund/$(hostname).tmp" "/lez/fund/$(hostname)"
-    # lez-setup answers in /lez/funded: "ok", or the error.
-    funded() { cat "/lez/funded/$(hostname)" 2>/dev/null; }
-    poll "LEZ payer $payer funded" "${RLN_FUND_TIMEOUT:-300}" '^ok' '.' funded ||
-      { kill $DAEMON; exit 1; }
+    # RLN_ALLOCATOR=1: an rln-allocator node registers the memberships, so
+    # this node's payer is left without a balance. That also keeps the RLN
+    # module from registering by itself when the allocator does not answer.
+    if [ "${RLN_ALLOCATOR:-0}" = 1 ]; then
+      log "LEZ payer $payer left unfunded: memberships come from the allocator"
+    else
+      echo "$fundto" > "/lez/fund/$(hostname).tmp" && mv "/lez/fund/$(hostname).tmp" "/lez/fund/$(hostname)"
+      # lez-setup answers in /lez/funded: "ok", or the error.
+      funded() { cat "/lez/funded/$(hostname)" 2>/dev/null; }
+      poll "LEZ payer $payer funded" "${RLN_FUND_TIMEOUT:-300}" '^ok' '.' funded ||
+        { kill $DAEMON; exit 1; }
+    fi
     poll "RLN membership active" "${RLN_MEMBERSHIP_TIMEOUT:-300}" 'state[^a-z]+active' 'state[^a-z]+failed|refused' \
       logoscore call "$RLN_MOD" get_membership_state \
         "$(cat /lez/registry-id)" "$RLN_IDENTIFIER" || { kill $DAEMON; exit 1; }
+    # How it was provisioned (by the allocator, or after a fallback) and what
+    # the payer holds.
+    log "RLN membership state: $(tr '\n' ' ' </tmp/poll.out | cut -c1-600)"
+    log "LEZ payer balance: $(logoscore call "$LEZ_MOD" get_native_balance "" 2>&1 | tr '\n' ' ' | cut -c1-200)"
     # With a mix registry the node starts without waiting for its Mix
     # membership; this only logs when it becomes active. The identifier is the
     # library's default for mix-rln-identifier-hex.

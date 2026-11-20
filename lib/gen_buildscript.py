@@ -116,15 +116,20 @@ def generate(resolved, out_path):
         time: from the fleet's libp2p_module, where it has that input."""
         if rln["allocator"] == "rln_gifter_module":
             return ""
+        return libp2p_override()
+
+    def libp2p_override():
         return f'--override-input libp2p_module "{comps["libp2p_module"]["flake"]}" '
 
-    extras = {manifest.MODULE: delivery_override}
+    extras = {manifest.MODULE: delivery_override, manifest.ALLOCATOR_MODULE: libp2p_override}
     modules = [k for k in MODULE_COMPONENTS if k in comps]
     for part, extra in (("lez", None), ("allocator", allocator_override), ("module", rln_override)):
         if part in rln:
             modules.append(rln[part])
             if extra:
                 extras[rln[part]] = extra
+    if manifest.ALLOCATOR_MODULE in comps:
+        modules.append(manifest.ALLOCATOR_MODULE)
     modules.append(manifest.MODULE)
     for i, key in enumerate(modules):
         build(key, f"/tmp/r-{i}", extras[key]() if key in extras else "")

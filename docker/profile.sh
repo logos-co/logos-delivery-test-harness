@@ -61,12 +61,18 @@ if [ "${RLN:-0}" = 1 ]; then
   # own, which lez-setup deployed beside the Relay one. The preset names it, so
   # the module starts the backend for both. Needs a delivery_module that knows
   # the mix-* preset keys. No allocator runs here: memberships are registered.
+  # RLN_ALLOCATOR=1 (manifest rln.allocator): the RLN module asks the
+  # allocators it finds through libp2p service discovery, at the default auth
+  # vector (peer-any); the node's own payer stays unfunded.
   mixregistry=$rlnregistry mixpreset=""
+  discover=false; [ "${RLN_ALLOCATOR:-0}" = 1 ] && discover=true
   if [ "${RLN_MIX_REGISTRY:-0}" = 1 ]; then
     [ -s /lez/mix-registry-id ] || { log "RLN FAILED: no mix registry from lez-setup"; exit 1; }
     mixregistry=$(cat /lez/mix-registry-id)
-    mixpreset=$(printf ', "mix-registry-id": "%s", "mix-metadata-topic": "%s", "allocator-discover": false' \
-      "$mixregistry" "${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}")
+    mixpreset=$(printf ', "mix-registry-id": "%s", "mix-metadata-topic": "%s", "allocator-discover": %s' \
+      "$mixregistry" "${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}" "$discover")
+  elif [ "$discover" = true ]; then
+    mixpreset=', "allocator-discover": true'
   fi
   printf '{"%s": {"enabled": true, "registry-id": "%s", "epoch-size-sec": %s, "max-epoch-gap": %s, "enable-validation": %s%s}}\n' \
     "${RLN_PRESET:-}" "$rlnregistry" "${RLN_EPOCH:-10}" "${RLN_MAX_EPOCH_GAP:-3}" "$validate" "$mixpreset" \

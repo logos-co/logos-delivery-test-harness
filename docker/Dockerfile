@@ -17,6 +17,8 @@ COPY docker/entrypoint-module.sh /opt/sim/entrypoint-module.sh
 COPY docker/profile.sh /opt/sim/profile.sh
 # sd-agent: libp2p_module alone, driven through its service-discovery API.
 COPY docker/entrypoint-agent.sh docker/sd_agent.py /opt/sim/
+# rln-allocator: libp2p_module, the LEZ registry provider and the allocator.
+COPY docker/entrypoint-allocator.sh /opt/sim/
 # Every node profile a group can name; the group's `config` picks one.
 COPY conf/ /opt/sim/conf/
 ENV PATH=/opt/logoscore/bin:$PATH
