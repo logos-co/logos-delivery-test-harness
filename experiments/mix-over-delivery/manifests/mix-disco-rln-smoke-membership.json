@@ -1,0 +1,204 @@
+{
+  "_comment": [
+    "generated: lib/gen_mixnet.py --duration 900 --allow-all --mix-kind module --rln --discover --mix 5 --senders 1 --receivers 2 --count 80 --interval 10 --send-after 60 --delivery-rev 5ae74e74f8af122b143701a02350f7de850e73aa --delivery-flake git+https://github.com/logos-messaging/logos-delivery --image logos-sim:membership-rln"
+  ],
+  "image": "logos-sim:membership-rln",
+  "duration": 900,
+  "module": {
+    "_comment": [
+      "Override without editing this file:",
+      "  DELIVERY_MODULE_REF=<branch|tag|full-sha>  DELIVERY_MODULE_REV=<full-sha>",
+      "and likewise DELIVERY_*, LIBP2P_MODULE_*, OPENMETRICS_MODULE_*,",
+      "LOGOSCORE_CLI_* for the dependencies this module otherwise chooses.",
+      "A branch is not a pin: out/resolved.json records the commit it resolved to."
+    ],
+    "flake": "git+https://github.com/logos-co/logos-delivery-module",
+    "ref": "master"
+  },
+  "overrides": {
+    "_comment": [
+      "Only what the chosen module ref cannot supply, or what we deliberately",
+      "differ on. master pins libp2p_module, openmetrics-module and",
+      "logos-delivery in its flake lock, so those are derived.",
+      "logos-logoscore-cli is not the module's own input: its lock only carries",
+      "copies pulled in by other inputs (libp2p_module, logos-test-modules), and",
+      "its docker-compose runs yet another. The harness keeps running 665ac28b,",
+      "the version every recorded run used. `harness.sh resolve` shows each source."
+    ],
+    "logos-logoscore-cli": {
+      "flake": "github:logos-co/logos-logoscore-cli",
+      "rev": "665ac28bc77f45e3c610f40fef975a12609de531"
+    },
+    "logos-delivery": {
+      "rev": "5ae74e74f8af122b143701a02350f7de850e73aa",
+      "flake": "git+https://github.com/logos-messaging/logos-delivery"
+    }
+  },
+  "rln": {},
+  "network": {
+    "subnet": "10.0.0.0/8",
+    "clusterId": 42,
+    "shardsInNetwork": 1
+  },
+  "groups": [
+    {
+      "name": "bootstrap",
+      "role": "bootstrap",
+      "kind": "logosdeliverynode",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.0.0.10",
+      "nodekey": "9999999999999999999999999999999999999999999999999999999999999999",
+      "args": [
+        "--entry-layer=kernel",
+        "--relay=true",
+        "--enable-kad-discovery=true",
+        "--discv5-discovery=false",
+        "--peer-exchange=false",
+        "--rendezvous=false",
+        "--dns-discovery=false",
+        "--rest=false",
+        "--metrics-logging=false",
+        "--kad-service-lookup-interval=15",
+        "--max-pure-libp2p-peers=200",
+        "--log-level=DEBUG",
+        "--store=true",
+        "--store-message-db-url=sqlite:///tmp/store.sqlite3"
+      ]
+    },
+    {
+      "name": "mix1",
+      "role": "bootstrap",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.10.1.20",
+      "kind": "delivery-module",
+      "nodekey": "251474f1fb3a3b6d5d859f8b5812447681a600c26f25be6e15a57319c2826aed",
+      "config": "mixnode.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "NODEKEY": "ca12f31b8cbf5f29e268ea64c20a37f3d50b539d891db0c3ebc7c0f66b1fb98b",
+        "MIXKEY": "5257b51d2046b95bcd46fed7a99293d7d83be61e16e6d53adbc5111dde34eaf5",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    },
+    {
+      "name": "mix2",
+      "role": "bootstrap",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.19.2.20",
+      "kind": "delivery-module",
+      "nodekey": "548d154a31c7c0bdc5029cfdd9a9234ced51bf2ed380d45a9625b9cf7d8e2ebc",
+      "config": "mixnode.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "NODEKEY": "15b18a7243257695704f66a3b1ddc9311194fc7d2e1896f440cc517c777ab7ed",
+        "MIXKEY": "46d771c69922a01c12e4d0b9ef773ed0ae5f5aa3ec19595464ce978bf8eda91d",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    },
+    {
+      "name": "mix3",
+      "role": "bootstrap",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.28.3.20",
+      "kind": "delivery-module",
+      "nodekey": "ab9fc94f00d8a7d5dc480ab388f9b9e668182a84cc87eaece60f038128af25fb",
+      "config": "mixnode.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "NODEKEY": "3b5bb1c6e7b76daba8afd89516e24140a67fc6be2ba071cc3b97d1b2e08c238e",
+        "MIXKEY": "8b56865fd0e3c503740b0f3508293465fef3d34645e76be9177e0cb3bf8ef276",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    },
+    {
+      "name": "mix4",
+      "role": "bootstrap",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.37.4.20",
+      "kind": "delivery-module",
+      "nodekey": "00a9e748264c77f39c3f221fd254df7d0a7ac2df7045171e8d75dc9c9a92cd87",
+      "config": "mixnode.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "NODEKEY": "d2b8f62a7e335bbd5576c8422844760f22ec378009eeea790c41e4dc45f23c34",
+        "MIXKEY": "da962a9793eaf405447bd3e965f6df7cd119d0079166b154f75d2975b1f96825",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    },
+    {
+      "name": "mix5",
+      "role": "bootstrap",
+      "count": 1,
+      "startAfter": 0,
+      "ip": "10.46.5.20",
+      "kind": "delivery-module",
+      "nodekey": "d966a5a902f28ea451b034407fa699dab227d026492c091f6531f1d72154e447",
+      "config": "mixnode.json.tpl",
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "NODEKEY": "23af406016994347aaa3e894e9a820049ace3656406fb06e7636b692db560270",
+        "MIXKEY": "e6ea05937251a5513f88011cccb534aa48b39fdabf09e29efd7a50ae712849d4",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    },
+    {
+      "name": "receivers",
+      "role": "member",
+      "kind": "delivery-module",
+      "count": 2,
+      "startAfter": 0,
+      "jitter": 20,
+      "config": "member.json.tpl",
+      "bootstraps": [
+        "bootstrap"
+      ],
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "RLN": "1"
+      }
+    },
+    {
+      "name": "senders",
+      "role": "member",
+      "kind": "delivery-module",
+      "count": 1,
+      "startAfter": 0,
+      "jitter": 20,
+      "config": "member-mix-static.json.tpl",
+      "bootstraps": [
+        "bootstrap"
+      ],
+      "env": {
+        "LOOKUP_INTERVAL": "15",
+        "ANONYMITY_LEVEL": "Required",
+        "SEND_COUNT": "80",
+        "SEND_INTERVAL": "10",
+        "SEND_AFTER": "60",
+        "MIX_ALLOW_ALL": "1",
+        "RLN": "1",
+        "MIX_RLN": "1",
+        "MIXNODES": ""
+      }
+    }
+  ]
+}

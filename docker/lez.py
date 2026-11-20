@@ -35,6 +35,10 @@ CLOCK_50 = "4BdcjoXkq786TMWcBGGHqcxeLYMZmn17rL4eM9ZyRWkX"
 CLOCK_SHARD = "2hwaRW8sMnyKLLRbDRw8k68tiv9bnfq98oxcdtcp157Z"
 GENESIS_BALANCE = 10**13
 FUNDING = int(os.environ.get("LEZ_FUNDING", 10**10))
+# The chain line (manifest rln.lezVersion): "0.3" is logos-execution-zone
+# v0.3.2, "0.4" is v0.4.0-rc1 and "0.4-rc3" v0.4.0-rc3, each with
+# logos-lez-rln's tools for it.
+V04 = os.environ.get("LEZ_VERSION", "0.3").startswith("0.4")
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
@@ -46,7 +50,12 @@ def tool(name, *args, env=None):
     r = subprocess.run(
         [f"{TOOLS}/target/release/{name}", *args], cwd=TOOLS,
         capture_output=True, text=True,
-        env={**os.environ, "HOME": HOME, "LEE_WALLET_HOME_DIR": HOME, **(env or {})},
+        # LEE_WALLET_PASSWORD: a throwaway wallet, unencrypted, so no tool prompts.
+        env={**os.environ, "HOME": HOME, "LEE_WALLET_HOME_DIR": HOME,
+             "LEE_WALLET_PASSWORD": "",
+             # risc0's executor, where the tools image carries one (build-lez.sh).
+             "PATH": f"{TOOLS}/bin:{os.environ.get('PATH', '')}",
+             **(env or {})},
     )
     if r.returncode != 0:
         raise RuntimeError(f"{name} exited {r.returncode}: {(r.stdout + r.stderr)[-600:]}")
@@ -94,7 +103,15 @@ def b58(hex_id):
 def fund(payer, account):
     """Transfer FUNDING to `account` (hex, as a node's wallet reports it) and see
     it arrive. fund_account returns once the transfer is submitted, and two
-    submitted within one block share the payer's nonce: the second is dropped."""
+    submitted within one block share the payer's nonce: the second is dropped.
+
+    On the v0.4 line `account` is the payer's public key: an account that was
+    never written is credited only by a transfer that presents its key. There
+    fund_account itself waits for the transfer's outcome and fails otherwise."""
+    if V04:
+        tool("fund_account", "--to-public-key", account, "--amount", str(FUNDING),
+             env={"LEZ_RLN_PAYER": payer})
+        return 1
     for attempt in range(1, 6):
         tool("fund_account", "--to", account, "--amount", str(FUNDING),
              env={"LEZ_RLN_PAYER": payer})
@@ -105,15 +122,45 @@ def fund(payer, account):
     raise RuntimeError(f"no balance at {account} after 5 transfers")
 
 
+def config_v04(payer_key):
+    """lez/sequencer/service/networks/local.json of v0.4.0-rc1, with the payer's
+    public key as the only genesis account (genesis credits a key, not an
+    account id) and 500 ms blocks."""
+    return {
+        "home": ".",
+        "max_num_tx_in_block": 20,
+        "mempool_max_size": 10000,
+        "block_create_timeout": "500ms",
+        "retry_pending_blocks_timeout": "5s",
+        "bedrock_config": {"channel_id": "01" * 32, "node_url": "http://localhost:18080"},
+        "genesis": {
+            "channel_params": {
+                "minimum_sequencer_stake": 149,
+                "posting_timeframe": 300,
+                "posting_timeout": 25,
+                "exit_delay": 100,
+                "max_block_size": 1048576,
+            },
+            "actions": [{"supply_account": {
+                "recipient": {"identified": {"key": payer_key}},
+                "balance": GENESIS_BALANCE,
+            }}],
+        },
+        "gossip": {"listen_addr": "/ip4/0.0.0.0/udp/0/quic-v1", "bootstrap_peers": []},
+    }
+
+
 def init():
     os.makedirs(HOME, exist_ok=True)
     os.makedirs(f"{LEZ}/seq", exist_ok=True)
-    payer = tool("mint_payer").split()[-1]
+    # v0.3 prints the payer's account id; v0.4 the id, then its public key.
+    minted = tool("mint_payer").split()
+    payer = minted[0] if V04 else minted[-1]
     with open(f"{LEZ}/payer", "w") as f:
         f.write(payer)
     # lez/sequencer/service/configs/docker/sequencer_config.json, with the payer
     # as the only genesis account and 500 ms blocks, so CLOCK_50 ticks in ~25 s.
-    config = {
+    config = config_v04(minted[1]) if V04 else {
         "home": "/var/lib/sequencer_service",
         "max_num_tx_in_block": 20,
         "mempool_max_size": 10000,
@@ -154,10 +201,8 @@ def clock_ms():
     return int.from_bytes(bytes(shard[8:16]), "little")
 
 
-def setup():
-    with open(f"{LEZ}/payer") as f:
-        payer = f.read().strip()
-    wait("the sequencer produced no block", lambda: rpc("getLastBlockId") >= 1, 120)
+def deploy(payer):
+    """Deploy one RLN registry with a tree of its own; returns its id."""
     out = tool("run_setup", env={
         "LEZ_RLN_PAYER": payer,
         "LEZ_RLN_TREE_ID_HEX": secrets.token_hex(32),
@@ -166,14 +211,35 @@ def setup():
     account = next((l.split()[-1] for l in out.splitlines() if l.startswith("Config account:")), None)
     if not account:
         sys.exit(f"[harness lez] FAILED: run_setup printed no config account:\n{out[-600:]}")
-    registry = f"logos:local:{b58_hex(account)}"
-    wait("CLOCK_50 never ticked", lambda: clock_ms() > 0, 180)
+    return f"logos:local:{b58_hex(account)}"
+
+
+def publish(name, registry):
+    with open(f"{PUB}/{name}.tmp", "w") as f:
+        f.write(registry)
+    os.rename(f"{PUB}/{name}.tmp", f"{PUB}/{name}")
+
+
+def setup():
+    with open(f"{LEZ}/payer") as f:
+        payer = f.read().strip()
+    wait("the sequencer produced no block", lambda: rpc("getLastBlockId") >= 1, 120)
+    registry = deploy(payer)
+    # LEZ_MIX_REGISTRY=1: a second registry, for Mix RLN (manifest rln.mixRegistry).
+    mix_registry = deploy(payer) if os.environ.get("LEZ_MIX_REGISTRY") == "1" else None
+    # The registry refuses registrations until CLOCK_50 ticked, at block 50.
+    # v0.4 serves accounts in another shape, so there the block height decides.
+    if V04:
+        wait("the chain never reached block 60", lambda: rpc("getLastBlockId") >= 60, 180)
+    else:
+        wait("CLOCK_50 never ticked", lambda: clock_ms() > 0, 180)
     os.makedirs(f"{PUB}/fund", exist_ok=True)
     os.makedirs(f"{PUB}/funded", exist_ok=True)
+    if mix_registry:
+        publish("mix-registry-id", mix_registry)
+        log("mix registry", mix_registry, "deployed")
     # Published last: a node that reads it can ask for funding at once.
-    with open(f"{PUB}/registry-id.tmp", "w") as f:
-        f.write(registry)
-    os.rename(f"{PUB}/registry-id.tmp", f"{PUB}/registry-id")
+    publish("registry-id", registry)
     log("registry", registry, "deployed; CLOCK_50 live; funding on request")
     while True:
         for node in sorted(os.listdir(f"{PUB}/fund")):

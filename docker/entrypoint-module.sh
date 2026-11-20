@@ -48,9 +48,16 @@ retry "load-module libp2p_module" logoscore load-module libp2p_module
 # The RLN modules are optional dependencies too: delivery_module forwards every
 # RLN request to liblogos_rln_module, which reads the registry through
 # liblogos_lez_rln_module.
+RLN_MOD=liblogos_rln_module LEZ_MOD=liblogos_lez_rln_module ALLOC_MOD=rln_gifter_module
+# delivery_module 0.4.0 and later: the modules of the split repositories.
+[ -d /opt/modules/rln_module ] &&
+  RLN_MOD=rln_module LEZ_MOD=rln_lez_module ALLOC_MOD=membership_allocation_client_module
 if [ "${RLN:-0}" = 1 ]; then
-  retry "load-module liblogos_lez_rln_module" logoscore load-module liblogos_lez_rln_module
-  retry "load-module liblogos_rln_module" logoscore load-module liblogos_rln_module
+  retry "load-module $LEZ_MOD" logoscore load-module "$LEZ_MOD"
+  # The allocator client: a dependency of newer RLN modules, built only then.
+  [ -d "/opt/modules/$ALLOC_MOD" ] &&
+    retry "load-module $ALLOC_MOD" logoscore load-module "$ALLOC_MOD"
+  retry "load-module $RLN_MOD" logoscore load-module "$RLN_MOD"
 fi
 retry "load-module delivery_module" logoscore load-module delivery_module
 retry "createNode" logoscore call delivery_module createNode @/data/member.json
@@ -80,16 +87,31 @@ if [ "${RLN:-0}" = 1 ]; then
     logoscore call delivery_module rlnState || { kill $DAEMON; exit 1; }
   if [ "${RLN_MEMBERSHIP:-1}" = 1 ]; then
     poll "LEZ wallet ready" "${RLN_WALLET_TIMEOUT:-120}" 'state[^a-z]+ready' 'state[^a-z]+failed' \
-      logoscore call liblogos_lez_rln_module wallet_status || { kill $DAEMON; exit 1; }
-    payer=$(grep -oE 'payer[^A-Za-z0-9]+[A-Za-z0-9]+' /tmp/poll.out | grep -oE '[A-Za-z0-9]+$' | head -1)
-    echo "$payer" > "/lez/fund/$(hostname).tmp" && mv "/lez/fund/$(hostname).tmp" "/lez/fund/$(hostname)"
+      logoscore call "$LEZ_MOD" wallet_status || { kill $DAEMON; exit 1; }
+    payer=$(grep -oE 'payer[^A-Za-z0-9_]+[A-Za-z0-9]+' /tmp/poll.out | grep -oE '[A-Za-z0-9]+$' | head -1)
+    fundto=$payer
+    # On the v0.4 chain line a transfer to an account that was never written
+    # must present its public key, so that is what lez-setup is asked to fund.
+    if [ "${LEZ_VERSION:-0.3}" != 0.3 ]; then
+      fundto=$(grep -oE 'payer_public_key[^A-Za-z0-9]+[A-Za-z0-9]+' /tmp/poll.out | grep -oE '[A-Za-z0-9]+$' | head -1)
+      [ -n "$fundto" ] || { log "LEZ wallet reports no payer public key"; kill $DAEMON; exit 1; }
+    fi
+    echo "$fundto" > "/lez/fund/$(hostname).tmp" && mv "/lez/fund/$(hostname).tmp" "/lez/fund/$(hostname)"
     # lez-setup answers in /lez/funded: "ok", or the error.
     funded() { cat "/lez/funded/$(hostname)" 2>/dev/null; }
     poll "LEZ payer $payer funded" "${RLN_FUND_TIMEOUT:-300}" '^ok' '.' funded ||
       { kill $DAEMON; exit 1; }
     poll "RLN membership active" "${RLN_MEMBERSHIP_TIMEOUT:-300}" 'state[^a-z]+active' 'state[^a-z]+failed|refused' \
-      logoscore call liblogos_rln_module get_membership_state \
+      logoscore call "$RLN_MOD" get_membership_state \
         "$(cat /lez/registry-id)" "$RLN_IDENTIFIER" || { kill $DAEMON; exit 1; }
+    # With a mix registry the node starts without waiting for its Mix
+    # membership; this only logs when it becomes active. The identifier is the
+    # library's default for mix-rln-identifier-hex.
+    if [ "${RLN_MIX_REGISTRY:-0}" = 1 ] && [ "${MIX_RLN:-0}" = 1 ]; then
+      poll "Mix RLN membership active" "${RLN_MEMBERSHIP_TIMEOUT:-300}" 'state[^a-z]+active' 'state[^a-z]+failed|refused' \
+        logoscore call "$RLN_MOD" get_membership_state "$(cat /lez/mix-registry-id)" \
+          6d69782d726c6e2d7370616d2d70726f74656374696f6e2f7631000000000000 &
+    fi
   fi
 fi
 

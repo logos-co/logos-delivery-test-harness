@@ -121,6 +121,9 @@ def _module_service(g, name, ip, net_conf, join, depends_on, image, rln=None):
         env.setdefault("LEZ_RLN_SEQUENCER", manifest.lez_sequencer_url())
         env.setdefault("RLN_EPOCH", str(rln["epochSizeSec"]))
         env.setdefault("RLN_MAX_EPOCH_GAP", str(rln["maxEpochGap"]))
+        if rln.get("mixRegistry"):
+            env.setdefault("RLN_MIX_REGISTRY", "1")
+        env.setdefault("LEZ_VERSION", rln["lezVersion"])
         lez_volume = "\n      - ./out/lez/pub:/lez"
     envblock = "\n".join(f"      {k}: \"{v}\"" for k, v in env.items())
     health = ""
@@ -156,12 +159,15 @@ def _lez_services(rln):
     """The local LEZ chain of an RLN run: lez-init mints the payer the chain
     funds at genesis, the sequencer starts on the config that names it, and
     lez-setup deploys the RLN registry and then funds the nodes (docker/lez.py)."""
+    mix_registry = '\n      LEZ_MIX_REGISTRY: "1"' if rln.get("mixRegistry") else ""
+
     def tool(name, mode, ip, depends):
         return f"""  {name}:
-    image: logos-sim-lez:local
+    image: {rln["toolsImage"]}
     command: ["{mode}"]
     environment:
-      LEZ_RLN_SEQUENCER: "{manifest.lez_sequencer_url()}"
+      LEZ_VERSION: "{rln["lezVersion"]}"
+      LEZ_RLN_SEQUENCER: "{manifest.lez_sequencer_url()}"{mix_registry}
     volumes:
       - ./out/lez:/lez
 {depends}    networks:

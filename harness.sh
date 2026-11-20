@@ -120,34 +120,53 @@ cmd_build() {
 # What an RLN run adds to the nix builds: the local LEZ chain. Each piece is
 # built once and kept; remove the image (or out/lez-tools) to build it again.
 build_lez() {
-  local seq
-  seq=$($PY -c "import manifest;print(manifest.load('$MANIFEST')['rln']['sequencerImage'])")
+  local seq tools ref rln_rev dockerfile r0vm suffix
+  # The chain line the manifest asks for (rln.lezVersion, lib/manifest.py
+  # LEZ_VERSIONS): sequencer tag, registry tools revision, the sequencer's
+  # Dockerfile suffix and the r0vm version of the tools ("-" for none),
+  # artefact suffix (last: it may be empty).
+  read -r seq tools ref rln_rev dockerfile r0vm suffix < <($PY -c "
+import manifest
+r = manifest.load('$MANIFEST')['rln']
+v = manifest.LEZ_VERSIONS[r['lezVersion']]
+print(r['sequencerImage'], r['toolsImage'], v['ref'], v['rlnRev'],
+      v.get('dockerfile', v['suffix']) or '-', v.get('r0vm', '-'), v['suffix'])")
+  [ "$dockerfile" = - ] && dockerfile=""
+  [ "$r0vm" = - ] && r0vm=""
+  # LEZ_REF in the environment still moves the default line's sequencer.
+  [ -z "$suffix" ] && ref=$LEZ_REF
+  local default_seq=logos-sim-lez-sequencer:${suffix:-local}
   # The standalone sequencer, from source for this host's platform (see
-  # docker/Dockerfile.lez-sequencer). A manifest naming another image brings its own.
-  if [ "$seq" = logos-sim-lez-sequencer:local ] && ! docker image inspect "$seq" >/dev/null 2>&1; then
-    log "docker build $seq from logos-execution-zone $LEZ_REF"
-    [ -d "$out/lez-src/logos-execution-zone/.git" ] ||
-      git clone -q --depth 1 --branch "$LEZ_REF" \
-        https://github.com/logos-blockchain/logos-execution-zone.git "$out/lez-src/logos-execution-zone"
-    docker build -t "$seq" -f "$here/docker/Dockerfile.lez-sequencer" "$out/lez-src/logos-execution-zone"
+  # docker/Dockerfile.lez-sequencer*). A manifest naming another image brings its own.
+  if [ "$seq" = "$default_seq" ] && ! docker image inspect "$seq" >/dev/null 2>&1; then
+    local src=$out/lez-src/logos-execution-zone${suffix:+-$suffix}
+    log "docker build $seq from logos-execution-zone $ref"
+    [ -d "$src/.git" ] ||
+      git clone -q --depth 1 --branch "$ref" \
+        https://github.com/logos-blockchain/logos-execution-zone.git "$src"
+    docker build -t "$seq" -f "$here/docker/Dockerfile.lez-sequencer${dockerfile:+-$dockerfile}" "$src"
   fi
   # logos-lez-rln's guest programs and tools (docker/build-lez.sh): the guest
   # programs as linux/amd64, with the docker socket; the tools natively.
-  if [ ! -x "$out/lez-tools/lez-rln/target/release/run_setup" ]; then
-    local platform
+  local tools_dir=lez-tools${suffix:+-$suffix}
+  if [ ! -x "$out/$tools_dir/lez-rln/target/release/run_setup" ]; then
+    local platform step
     for platform in linux/amd64 ""; do
-      log "building logos-lez-rln's ${platform:+guest programs ($platform)}${platform:-tools}"
+      step=tools
+      [ -n "$platform" ] && step=guest
+      log "building logos-lez-rln's $step${platform:+ programs ($platform)} at $rln_rev"
       docker build -q ${platform:+--platform $platform} -t logos-sim-lez-build:local \
         -f "$here/docker/Dockerfile.lez-build" "$here/docker"
       docker run --rm ${platform:+--platform $platform} \
+        -e LEZ_RLN_REV="$rln_rev" -e LEZ_SUFFIX="$suffix" -e R0VM_VERSION="$r0vm" \
         -v logos-harness-lez-build:/work -v "$out:/out" \
         -v "$here/docker/build-lez.sh:/build-lez.sh:ro" \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        logos-sim-lez-build:local bash /build-lez.sh "${platform:+guest}${platform:-tools}"
+        logos-sim-lez-build:local bash /build-lez.sh "$step"
     done
   fi
-  log "docker build logos-sim-lez:local"
-  docker build -q -t logos-sim-lez:local -f "$here/docker/Dockerfile.lez" "$here"
+  log "docker build $tools"
+  docker build -q -t "$tools" --build-arg TOOLS="out/$tools_dir" -f "$here/docker/Dockerfile.lez" "$here"
 }
 
 cmd_gen() {

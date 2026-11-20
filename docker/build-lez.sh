@@ -22,7 +22,10 @@ export CARGO_HOME=/work/cargo-$arch RISC0_HOME=/work/risc0
 export PATH=$CARGO_HOME/bin:/work/risc0/bin:$PATH
 mkdir -p "$CARGO_HOME" "$RISC0_HOME"
 
-src=/work/logos-lez-rln
+# LEZ_SUFFIX (harness.sh, from the manifest's rln.lezVersion) keeps another
+# chain line's checkout, cargo target and output apart from the default one.
+LEZ_SUFFIX=${LEZ_SUFFIX:-}
+src=/work/logos-lez-rln${LEZ_SUFFIX:+-$LEZ_SUFFIX}
 [ -d "$src/.git" ] || git clone https://github.com/logos-co/logos-lez-rln.git "$src"
 cd "$src"
 git config --global --add safe.directory "$src"
@@ -43,16 +46,27 @@ case "${1:-}" in
     # toolchain, and then strips the user ELF in the docker-built ones: skip the
     # first, and give the second any llvm-strip.
     export RISC0_SKIP_BUILD=1 RISC0_LLVM_STRIP=${RISC0_LLVM_STRIP:-$(command -v llvm-strip)}
-    export CARGO_TARGET_DIR=/work/target-$arch
+    export CARGO_TARGET_DIR=/work/target-$arch${LEZ_SUFFIX:+-$LEZ_SUFFIX}
     cargo build --release --manifest-path lez-rln/Cargo.toml \
       --bin mint_payer --bin run_setup --bin fund_account
-    dst=/out/lez-tools/lez-rln
-    rm -rf /out/lez-tools
+    tools=/out/lez-tools${LEZ_SUFFIX:+-$LEZ_SUFFIX}
+    dst=$tools/lez-rln
+    rm -rf "$tools"
     mkdir -p "$dst/target/release" "$dst/$guest"
     cp "$CARGO_TARGET_DIR"/release/{mint_payer,run_setup,fund_account} "$dst/target/release/"
     cp lez-rln/$guest/*.bin "$dst/$guest/"
     cp -r lez-rln/resources "$dst/"
-    echo "$LEZ_RLN_REV" > /out/lez-tools/rev
+    # R0VM_VERSION (a chain line whose wallet simulates transactions): risc0's
+    # executor, which the tools start as a child process. Built here because
+    # risc0 ships none for linux/arm64.
+    if [ -n "${R0VM_VERSION:-}" ]; then
+      [ -x "/work/r0vm-$arch-$R0VM_VERSION/bin/r0vm" ] ||
+        CARGO_TARGET_DIR=/work/target-r0vm-$arch cargo install risc0-r0vm \
+          --version "$R0VM_VERSION" --locked --root "/work/r0vm-$arch-$R0VM_VERSION"
+      mkdir -p "$dst/bin"
+      cp "/work/r0vm-$arch-$R0VM_VERSION/bin/r0vm" "$dst/bin/"
+    fi
+    echo "$LEZ_RLN_REV" > "$tools/rev"
     ls -l "$dst/target/release" "$dst/$guest"
     ;;
   *) echo "usage: build-lez.sh guest|tools" >&2; exit 1 ;;

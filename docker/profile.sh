@@ -57,14 +57,26 @@ if [ "${RLN:-0}" = 1 ]; then
   export LOGOS_DELIVERY_RLN_PRESETS=/data/rln-presets.json
   # Epoch 10 s and gap 3 are the Mix profile's: Mix RLN refuses to start on a
   # backend configured otherwise.
-  printf '{"%s": {"enabled": true, "registry-id": "%s", "epoch-size-sec": %s, "max-epoch-gap": %s, "enable-validation": %s}}\n' \
-    "${RLN_PRESET:-}" "$rlnregistry" "${RLN_EPOCH:-10}" "${RLN_MAX_EPOCH_GAP:-3}" "$validate" \
+  # RLN_MIX_REGISTRY=1 (manifest rln.mixRegistry): Mix RLN on a registry of its
+  # own, which lez-setup deployed beside the Relay one. The preset names it, so
+  # the module starts the backend for both. Needs a delivery_module that knows
+  # the mix-* preset keys. No allocator runs here: memberships are registered.
+  mixregistry=$rlnregistry mixpreset=""
+  if [ "${RLN_MIX_REGISTRY:-0}" = 1 ]; then
+    [ -s /lez/mix-registry-id ] || { log "RLN FAILED: no mix registry from lez-setup"; exit 1; }
+    mixregistry=$(cat /lez/mix-registry-id)
+    mixpreset=$(printf ', "mix-registry-id": "%s", "mix-metadata-topic": "%s", "allocator-discover": false' \
+      "$mixregistry" "${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}")
+  fi
+  printf '{"%s": {"enabled": true, "registry-id": "%s", "epoch-size-sec": %s, "max-epoch-gap": %s, "enable-validation": %s%s}}\n' \
+    "${RLN_PRESET:-}" "$rlnregistry" "${RLN_EPOCH:-10}" "${RLN_MAX_EPOCH_GAP:-3}" "$validate" "$mixpreset" \
     > "$LOGOS_DELIVERY_RLN_PRESETS"
 fi
-# MIX_RLN=1 (with RLN=1): per-hop Mix proofs from the same RLN backend and
-# registry, coordinated on MIX_RLN_TOPIC. Flat-shape profiles only.
+# MIX_RLN=1 (with RLN=1): per-hop Mix proofs from the same RLN backend,
+# coordinated on MIX_RLN_TOPIC; on the Relay registry, or on the mix registry
+# with RLN_MIX_REGISTRY=1. Flat-shape profiles only.
 mixrln=""
-[ "${MIX_RLN:-0}" = 1 ] && mixrln="\"mix-rln-registry-id\": \"$rlnregistry\", \"mix-rln-metadata-topic\": \"${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}\","
+[ "${MIX_RLN:-0}" = 1 ] && mixrln="\"mix-rln-registry-id\": \"${mixregistry:-}\", \"mix-rln-metadata-topic\": \"${MIX_RLN_TOPIC:-/sim/1/mix-rln-metadata/proto}\","
 sed -e "s|@IP@|$IP|g" -e "s|@BOOTSTRAPS@|$bootstraps|g" -e "s|@LOOKUP@|$LOOKUP|g" \
     -e "s|@MIX_ALLOW_ALL@|$mixallow|g" -e "s|@MIX_RLN@|$mixrln|g" \
     -e "s|@NODEKEY@|${NODEKEY:-}|g" -e "s|@MIXKEY@|${MIXKEY:-}|g" \

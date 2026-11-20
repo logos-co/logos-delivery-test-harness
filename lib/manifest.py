@@ -21,9 +21,29 @@ OUTPUTS = {
 # Built on top of those for a manifest with an "rln" section: the RLN module
 # delivery_module calls, and the LEZ registry provider that one calls. Both are
 # nodes of the module's lock, like libp2p_module.
-RLN_OUTPUTS = {
-    "liblogos_lez_rln_module": "install-portable",
-    "liblogos_rln_module": "install-portable",
+#
+# Their names depend on the module ref. Each row is (RLN module, LEZ registry
+# provider, allocator client); the first row whose RLN module the lock names is
+# the one built. The allocator client is built only where the lock names it.
+RLN_MODULE_SETS = [
+    # The split repositories (delivery_module 0.4.0 and later).
+    ("rln_module", "rln_lez_module", "membership_allocation_client_module"),
+    # logos-rln-modules, one repository with a subdirectory per module.
+    ("liblogos_rln_module", "liblogos_lez_rln_module", "rln_gifter_module"),
+]
+RLN_OUTPUT = "install-portable"
+
+# rln.lezVersion -> what `harness build` builds the local chain from: the
+# logos-execution-zone tag of the sequencer, the logos-lez-rln revision of the
+# registry tools (it must target that tag), and the suffix of their artefacts.
+LEZ_VERSIONS = {
+    "0.3": {"ref": "v0.3.2", "rlnRev": "235ddaeee84eec385a2d4b68d69f702a29c14cf3", "suffix": ""},
+    "0.4": {"ref": "v0.4.0-rc1", "rlnRev": "a06b04455d20e129ee974f211cf3a3c6fcdb21b3", "suffix": "0.4"},
+    # Same recipe as "0.4" (docker/lez.py, Dockerfile.lez-sequencer-0.4). Its
+    # wallet simulates a transaction before sending it, in risc0's r0vm: the
+    # tools image carries one, at the risc0 version the wallet resolves.
+    "0.4-rc3": {"ref": "v0.4.0-rc3", "rlnRev": "cf5e1f578a05fe5a66d845597c83c62b224aa19c",
+                "suffix": "0.4-rc3", "dockerfile": "0.4", "r0vm": "3.0.5"},
 }
 
 MODULE = "logos-delivery-module"
@@ -226,7 +246,16 @@ def load(path):
         rln = m["rln"] = {k: v for k, v in m["rln"].items() if not k.startswith("_")}
         rln.setdefault("epochSizeSec", 10)
         rln.setdefault("maxEpochGap", 3)
-        rln.setdefault("sequencerImage", "logos-sim-lez-sequencer:local")
+        # lezVersion: the chain line the RLN modules of the chosen module ref
+        # read. "0.3" is logos-execution-zone v0.3.2; "0.4" is v0.4.0-rc1, with
+        # another account format, genesis and funding (docker/lez.py);
+        # "0.4-rc3" is v0.4.0-rc3.
+        rln.setdefault("lezVersion", "0.3")
+        if rln["lezVersion"] not in LEZ_VERSIONS:
+            _fail(f"rln.lezVersion must be one of {sorted(LEZ_VERSIONS)}")
+        suffix = LEZ_VERSIONS[rln["lezVersion"]]["suffix"]
+        rln.setdefault("sequencerImage", "logos-sim-lez-sequencer:" + (suffix or "local"))
+        rln.setdefault("toolsImage", "logos-sim-lez:" + (suffix or "local"))
 
     groups = m.get("groups") or []
     if not groups:
@@ -462,8 +491,9 @@ def uses_rln(m):
 
 
 def outputs(m):
-    """Component -> flake output, for everything this manifest builds."""
-    return {**OUTPUTS, **(RLN_OUTPUTS if uses_rln(m) else {})}
+    """Component -> flake output, for what every manifest builds. The RLN
+    modules come on top, under the names the module's lock uses (resolve.py)."""
+    return dict(OUTPUTS)
 
 
 def image(m):

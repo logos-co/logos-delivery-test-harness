@@ -83,7 +83,17 @@ def resolve(m, lock_path, out_path):
         else module_ref
     )
 
-    for comp, output in manifest.outputs(m).items():
+    wanted = manifest.outputs(m)
+    rln_names = None
+    if manifest.uses_rln(m):
+        # The RLN modules, under the names this module ref's lock uses.
+        rln_names = next(
+            (s for s in manifest.RLN_MODULE_SETS if s[0] in nodes),
+            manifest.RLN_MODULE_SETS[0],
+        )
+        wanted[rln_names[1]] = wanted[rln_names[0]] = manifest.RLN_OUTPUT
+
+    for comp, output in wanted.items():
         if comp == manifest.MODULE:
             resolved[comp] = {
                 "flake": module_pinned,
@@ -127,6 +137,22 @@ def resolve(m, lock_path, out_path):
             "source": "override" if ov else "module-lock",
         }
 
+    # A newer RLN module depends on the allocator client, which the module's
+    # lock then pins. Built only where the lock names it.
+    allocator = _find(nodes, rln_names[2]) if rln_names else None
+    locked = dict((allocator or {}).get("locked") or {})
+    has_allocator = bool(locked.get("rev") and _base_url(locked))
+    if has_allocator:
+        base = _base_url(locked)
+        # The lock keeps a flake's subdirectory beside the URL.
+        if locked.get("dir") and "dir=" not in base:
+            base += ("&" if "?" in base else "?") + "dir=" + locked["dir"]
+        resolved[rln_names[2]] = {
+            "flake": _compose(base, locked["rev"], locked.get("ref")),
+            "output": manifest.RLN_OUTPUT,
+            "source": "module-lock",
+        }
+
     if manifest.uses_demo(m):
         # Not an input of the module: its own source, main unless overridden.
         # build records the commit a branch resolved to (out/demo-paths.json).
@@ -156,6 +182,11 @@ def resolve(m, lock_path, out_path):
         sys.exit(1)
 
     doc = {"module": module_pinned, "components": resolved}
+    if rln_names:
+        # Which component plays which part, for the build script.
+        doc["rln"] = {"module": rln_names[0], "lez": rln_names[1]}
+        if has_allocator:
+            doc["rln"]["allocator"] = rln_names[2]
     with open(out_path, "w") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")

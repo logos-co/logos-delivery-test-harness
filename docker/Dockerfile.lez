@@ -4,6 +4,8 @@ FROM ubuntu:24.04
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates libpcsclite1 python3 && \
     rm -rf /var/lib/apt/lists/*
-COPY out/lez-tools/lez-rln /opt/lez-rln
+# out/lez-tools-0.4 for the v0.4 chain line (manifest rln.lezVersion).
+ARG TOOLS=out/lez-tools
+COPY ${TOOLS}/lez-rln /opt/lez-rln
 COPY docker/lez.py /opt/sim/lez.py
 ENTRYPOINT ["python3", "/opt/sim/lez.py"]

@@ -1,0 +1,38 @@
+# The standalone LEZ sequencer of the v0.4 line (manifest rln.lezVersion "0.4"),
+# built from the logos-execution-zone source for the host's own platform, as
+# docker/Dockerfile.lez-sequencer does for v0.3. Build context: a checkout of
+# that repository.
+#
+# What differs from v0.3: a sequencer runs out of a home that `setup` creates
+# from a config, and `start` then serves it. The config is the one
+# docker/lez.py writes (mounted at /etc/sequencer_service); with
+# --create-channel its genesis, which funds the payer, is kept.
+FROM rust:1.98.1-slim-trixie AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev libclang-dev clang cmake ninja-build git curl unzip \
+      ca-certificates libpcsclite-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --features prove,standalone --bin sequencer_service && \
+    cp target/release/sequencer_service /usr/local/bin/sequencer_service
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl libpcsclite1 && \
+    rm -rf /var/lib/apt/lists/*
+RUN useradd -m -u 1000 -s /bin/bash sequencer_service_user && \
+    mkdir -p /sequencer_service /etc/sequencer_service /var/lib/sequencer_service && \
+    chown -R sequencer_service_user:sequencer_service_user \
+      /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
+COPY --from=builder /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
+ENV RUST_LOG=info
+# Standalone mode mocks Bedrock, so any well-formed funding key serves; this is
+# the one logos-lez-rln's dev.sh uses.
+ENV FUNDING_PK=2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26
+USER sequencer_service_user
+WORKDIR /sequencer_service
+EXPOSE 3040
+CMD ["sh", "-c", "sequencer_service setup /var/lib/sequencer_service/home --config /etc/sequencer_service/sequencer_config.json --funding-public-key $FUNDING_PK --create-channel && exec sequencer_service start /var/lib/sequencer_service/home --rpc-listen-address 0.0.0.0:3040 --metrics-listen-address 0.0.0.0:9000"]

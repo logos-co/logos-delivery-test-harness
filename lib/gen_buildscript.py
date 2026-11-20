@@ -24,12 +24,9 @@ NIX_CONF = """mkdir -p /etc/nix
 """
 
 # Components whose `modules/` directory is copied into the image's module dir.
-# The RLN ones are resolved only for a manifest with an "rln" section.
-MODULE_COMPONENTS = [
-    "libp2p_module", "openmetrics-module",
-    "liblogos_lez_rln_module", "liblogos_rln_module",
-    "logos-delivery-module",
-]
+# The RLN ones (resolved["rln"], for a manifest with an "rln" section) are
+# built between these and the delivery module.
+MODULE_COMPONENTS = ["libp2p_module", "openmetrics-module"]
 
 
 # The demo runs straight from the nix volume rather than from a copy in an image
@@ -99,21 +96,38 @@ def generate(resolved, out_path):
         return f'--override-input logos-delivery "{dv["flake"]}" '
 
     build("logos-logoscore-cli", "/tmp/r-core")
-    def lez_override():
-        """Build liblogos_rln_module against the liblogos_lez_rln_module built here.
+    rln = resolved.get("rln") or {}
 
-        Its flake names that input by branch, so a standalone build would take
-        whatever the branch points at today and compile a second LEZ wallet for
-        it. The delivery module's flake pins the input the same way.
+    def rln_override():
+        """Build the RLN module against the LEZ provider and the allocator
+        client built here.
+
+        Its flake may name those inputs by branch, so a standalone build would
+        take whatever the branch points at today and compile a second LEZ
+        wallet for it. The delivery module's flake pins the inputs the same way.
         """
-        return f'--override-input liblogos_lez_rln_module "{comps["liblogos_lez_rln_module"]["flake"]}" '
+        return "".join(
+            f'--override-input {rln[part]} "{comps[rln[part]]["flake"]}" '
+            for part in ("lez", "allocator") if part in rln
+        )
 
+    def allocator_override():
+        """The allocator client generates its libp2p_module client at build
+        time: from the fleet's libp2p_module, where it has that input."""
+        if rln["allocator"] == "rln_gifter_module":
+            return ""
+        return f'--override-input libp2p_module "{comps["libp2p_module"]["flake"]}" '
+
+    extras = {manifest.MODULE: delivery_override}
     modules = [k for k in MODULE_COMPONENTS if k in comps]
+    for part, extra in (("lez", None), ("allocator", allocator_override), ("module", rln_override)):
+        if part in rln:
+            modules.append(rln[part])
+            if extra:
+                extras[rln[part]] = extra
+    modules.append(manifest.MODULE)
     for i, key in enumerate(modules):
-        extra = delivery_override() if key == "logos-delivery-module" else ""
-        if key == "liblogos_rln_module":
-            extra = lez_override()
-        build(key, f"/tmp/r-{i}", extra)
+        build(key, f"/tmp/r-{i}", extras[key]() if key in extras else "")
     build("logos-delivery", "/tmp/r-seed")
     if manifest.DEMO in comps:
         demo_builds(comps, lines)
