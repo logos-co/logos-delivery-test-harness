@@ -356,7 +356,8 @@ def generate(m, compose_path, targets_path, plan_path):
             targets.append(_target(g, name, ip))
             names.append(name)
         else:
-            for index, ip in enumerate(_addresses(net, g["count"], taken), 1):
+            place = manifest.spread_addresses if net_conf["spread"] else _addresses
+            for index, ip in enumerate(place(net, g["count"], taken), 1):
                 member_no += 1
                 name = f"m{member_no}"
                 # Round-robin over the whole fleet, so late joiners alternate

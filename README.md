@@ -178,7 +178,11 @@ the module's flake lock still points at an older logos-delivery.
 
 `lib/gen_mixnet.py` writes a mix network of any size (`--mix`, `--senders`,
 `--receivers`, `--mix-kind native|module`, `--rln`, `--stop N --stop-at S`,
-`--delivery-rev`, `--image`, `--duration`).
+`--delivery-rev`, `--image`, `--duration`). `--base <manifest>` takes the
+build, chain, network, bootstrap and allocator from a manifest and resizes its
+mix, receiver and sender groups; `--allocator-funding N` sets the allocator's
+`ALLOCATOR_FUNDING`; `--spread` sets `network.spread` and spreads the mix nodes
+the same way.
 
 A logos-delivery that restricts mix to public addresses needs
 `--mix-allow-all-addresses=true` on native mix nodes and `MIX_ALLOW_ALL=1` on
@@ -321,6 +325,11 @@ before anything is built.
 - `shardsInNetwork` (default `1`) — the shard count, rendered into the module
   profiles as `@SHARDS@`. Not per group: every node of a network must shard the
   same way. logosdeliverynode nodes always get `--shard=0`.
+- `spread` (default `false`) — instead of the hash scatter, give each member
+  the address sharing the shortest prefix with the bootstraps and the members
+  placed before it (`manifest.spread_addresses`). Inside one /8 the registrar's
+  IP score is that shared prefix, so this gives the shortest first-advert
+  waits the subnet allows (13 shared bits at most for 34 nodes).
 
 ### Groups
 

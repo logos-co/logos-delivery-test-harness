@@ -125,7 +125,7 @@ retry "openmetrics start" logoscore call openmetrics start \
 
 # What the payer holds, once a minute: it falls with every registration paid.
 while sleep 60; do
-  log "payer balance: $(logoscore call rln_lez_module get_native_balance "" 2>&1 | grep -oE 'balance[^0-9]+[0-9]+' | grep -oE '[0-9]+$')"
+  log "payer balance: $(logoscore call rln_lez_module get_native_balance "" 2>&1 | grep -oE 'balance[\\": ]+[0-9]+' | grep -oE '[0-9]+$')"
 done &
 
 wait $DAEMON

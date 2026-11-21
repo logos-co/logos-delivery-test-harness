@@ -29,6 +29,9 @@ from collections import Counter, defaultdict
 
 
 IN_FLIGHT_S = 60
+# Memory slopes are taken from this many seconds after T0 on: the start-up
+# (memberships, discovery, first adverts) is not part of a node's steady growth.
+WARMUP_S = 1200
 
 
 def expectations(d):
@@ -86,9 +89,26 @@ def dist(counts):
     return f"min {v[0]} / median {v[len(v) // 2]} / max {v[-1]}, cv {cv:.2f}"
 
 
-def long_run(d, sends, own, rx, hashes, receivers, to_prop):
+def slope(points):
+    """Least-squares slope of [(x, y)], per unit of x."""
+    if len(points) < 2:
+        return 0.0
+    mx = sum(x for x, _ in points) / len(points)
+    my = sum(y for _, y in points) / len(points)
+    den = sum((x - mx) ** 2 for x, _ in points)
+    return sum((x - mx) * (y - my) for x, y in points) / den if den else 0.0
+
+
+def long_run(d, sends, own, rx, hashes, receivers, to_prop, received):
     """What a long run adds: percentiles, the run over time, end-to-end latency,
     mix routes (mixlog.txt), per-node mix load (q_mixload.json), resources."""
+    def full(s):
+        return all(s[1] in received[r] for r in receivers if r != s[0])
+
+    def prop(s):
+        ev = own[s[0]].get(s[3], {}) if s[3] else {}
+        return ev["messagePropagated"][0] - s[2] if "messagePropagated" in ev else None
+
     print(f"latency send->propagated: p50 {pct(to_prop, .5):.0f} / p90 {pct(to_prop, .9):.0f} "
           f"/ p99 {pct(to_prop, .99):.0f} ms")
     e2e = [rx[r][p] - t for _, p, t, _, _ in sends for r in receivers if p in rx[r]]
@@ -114,16 +134,21 @@ def long_run(d, sends, own, rx, hashes, receivers, to_prop):
         print(f"  +{i * width / 60e9:4.0f} min: {n:5d} sends, propagated {100 * ok / n:5.1f}%, "
               f"errors {err:4d}, p50 {pct(lat, .5):6.0f} / p90 {pct(lat, .9):6.0f} ms")
 
+    tries = {}
     path = os.path.join(d, "mixlog.txt")
     if os.path.exists(path):
-        sent_hash = {hashes.get((s[0], s[3])) for s in sends} - {None}
-        exits, handled, tries = Counter(), Counter(), {}
+        by_hash = {hashes.get((s[0], s[3])): s for s in sends}
+        by_hash.pop(None, None)
+        sent_hash = set(by_hash)
+        exits, handled = Counter(), Counter()
+        exited = defaultdict(set)  # exit node -> hashes it published
         with open(path) as f:
             for line in f:
                 parts = line.split()
                 if len(parts) == 3 and parts[1] == "exit" and parts[2] in sent_hash:
                     exits[parts[0]] += 1
                     handled[parts[2]] += 1
+                    exited[parts[0]].add(parts[2])
                 elif len(parts) == 4 and parts[1] == "try":
                     tries[parts[2]] = max(tries.get(parts[2], 0), int(parts[3]))
         print(f"mix exits: {sum(exits.values())} lightpush requests for {len(handled)}/{len(sent_hash)} "
@@ -134,6 +159,44 @@ def long_run(d, sends, own, rx, hashes, receivers, to_prop):
         print(f"  messages that reached more than one exit: {more}")
         tc = Counter(tries.values())
         print("  tries per message: " + ", ".join(f"{k} x{v}" for k, v in sorted(tc.items())))
+        print("  per exit node: messages exited, share of them that reached all receivers, "
+              "p50 send->propagated / send->received ms")
+        for n, hs in sorted(exited.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            ss = [by_hash[h] for h in hs]
+            lat = [x for x in map(prop, ss) if x is not None]
+            e2e = [rx[r][s[1]] - s[2] for s in ss for r in receivers
+                   if r != s[0] and s[1] in rx[r]]
+            print(f"    {n:<10} {len(ss):5d}  {100 * sum(map(full, ss)) / len(ss):5.1f}%  "
+                  f"p50 {pct(lat, .5):5.0f} / {pct(e2e, .5):5.0f}")
+
+    # Fixed 10-minute windows by send time, counted from T0 when the collect
+    # has it, so they line up with what happened at known offsets.
+    try:
+        with open(os.path.join(d, "t0")) as f:
+            base, label = int(f.read().strip()) * 10**9, "T0"
+    except (OSError, ValueError):
+        base, label = t0, "first send"
+    win = defaultdict(list)
+    for s in sends:
+        win[int((s[2] - base) // 600e9)].append(s)
+    print(f"10-minute windows by send time, from {label}: sends, reached all receivers, "
+          "errors, p50 / p90 send->propagated ms, mean tries")
+    shares = []
+    for i in sorted(win):
+        ss = win[i]
+        share = 100 * sum(map(full, ss)) / len(ss)
+        shares.append(share)
+        lat = [x for x in map(prop, ss) if x is not None]
+        err = sum("messageError" in (own[s[0]].get(s[3], {}) if s[3] else {}) for s in ss)
+        tr = [tries[h] for h in (hashes.get((s[0], s[3])) for s in ss) if h in tries]
+        print(f"  {label}+{i * 10:3d}-{i * 10 + 10:3d} min: {len(ss):4d} sends, {share:5.1f}%, "
+              f"errors {err:3d}, p50 {pct(lat, .5):5.0f} / p90 {pct(lat, .9):5.0f}, "
+              f"tries {sum(tr) / len(tr) if tr else float('nan'):.2f}"
+              + ("   < 97%" if share < 97 else ""))
+    overall = 100 * sum(map(full, sends)) / len(sends)
+    print(f"long-run criteria: reached all receivers {overall:.2f}% (target 99%), lowest "
+          f"window {min(shares):.1f}% (target 97%): "
+          + ("met" if overall >= 99 and min(shares) >= 97 else "NOT met"))
 
     path = os.path.join(d, "q_mixload.json")
     if os.path.exists(path):
@@ -145,15 +208,20 @@ def long_run(d, sends, own, rx, hashes, receivers, to_prop):
         load = defaultdict(dict)
         for r in series:
             m = r["metric"]
-            load[m["__name__"]][m.get("node", "?")] = load[m["__name__"]].get(m.get("node", "?"), 0) + float(r["value"][1])
+            # Split by the hop role of the mix counters (Entry, Intermediate, Exit, Reply).
+            name = m["__name__"] + (f"{{type={m['type']}}}" if "type" in m else "")
+            load[name][m.get("node", "?")] = load[name].get(m.get("node", "?"), 0) + float(r["value"][1])
         for name in sorted(load):
             v = [int(x) for x in load[name].values()]
-            print(f"{name}: total {sum(v)} over {len(v)} nodes; per node: {dist(v)}")
+            top = max(load[name].items(), key=lambda kv: kv[1])
+            print(f"{name}: total {sum(v)} over {len(v)} nodes; per node: {dist(v)}; "
+                  f"busiest {top[0]}")
 
     path = os.path.join(d, "stats.tsv")
     if os.path.exists(path):
         mem, cpu = defaultdict(float), defaultdict(list)
         total = defaultdict(float)
+        samples = defaultdict(list)  # container -> [(s from T0, MiB)]
         with open(path) as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
@@ -164,12 +232,24 @@ def long_run(d, sends, own, rx, hashes, receivers, to_prop):
                 mem[p[1]] = max(mem[p[1]], mib)
                 total[p[0]] += mib
                 cpu[p[0]].append(float(p[2].rstrip("%") or 0))
+                samples[p[1]].append((int(p[0]), mib))
         if total:
             cpus = [sum(v) for v in cpu.values()]
             print(f"resources: {len(mem)} containers, memory in use peak {max(total.values()) / 1024:.1f} GiB; "
                   f"CPU all containers mean {sum(cpus) / len(cpus):.0f}% / peak {max(cpus):.0f}% (100% = one core)")
             top = sorted(mem.items(), key=lambda kv: -kv[1])[:3]
             print("  largest: " + ", ".join(f"{n.split('-')[-2]} {m:.0f} MiB" for n, m in top))
+            tot = sorted((int(k), v) for k, v in total.items())
+            tot = [x for x in tot if x[0] >= WARMUP_S] or tot
+            print(f"memory from T0+{tot[0][0]}s: all containers {tot[0][1] / 1024:.2f} -> "
+                  f"{tot[-1][1] / 1024:.2f} GiB at T0+{tot[-1][0]}s, slope "
+                  f"{slope(tot) * 3600:.0f} MiB/h; per container: first / last MiB, slope MiB/h")
+            rows = []
+            for n, v in samples.items():
+                v = [x for x in v if x[0] >= WARMUP_S] or v
+                rows.append((slope(v) * 3600, n.split('-')[-2], v[0][1], v[-1][1]))
+            for sl, n, first, last in sorted(rows, reverse=True):
+                print(f"  {n:<10} {first:6.0f} {last:6.0f}  {sl:6.1f}")
 
 
 def main(d):
@@ -292,7 +372,7 @@ def main(d):
         print(f"receiver {r} missed {count}/{total}")
 
     if total >= 50:
-        long_run(d, sends, own, rx, hashes, receivers, to_prop)
+        long_run(d, sends, own, rx, hashes, receivers, to_prop, received)
 
     for s in sorted({s[0] for s in sends}):
         want = expect.get(s, "delivered")

@@ -247,6 +247,10 @@ def load(path):
     net.setdefault("subnet", "10.0.0.0/8")
     net.setdefault("clusterId", 42)
     net.setdefault("shardsInNetwork", 1)
+    # spread: members get addresses that share as few leading bits with each
+    # other and the bootstraps as the subnet allows (spread_addresses), instead
+    # of the hash scatter.
+    net.setdefault("spread", False)
 
     # "rln": {} (or with overrides) turns the local LEZ chain and its RLN
     # registry on; a group then opts in with env RLN=1.
@@ -583,6 +587,42 @@ def mix_node(g):
         return None
     return (f"/ip4/{g['ip']}/tcp/{MODULE_TCP_PORT}/p2p/{peer_id(env['NODEKEY'])}"
             f":{x25519_public(env['MIXKEY'])}")
+
+
+def spread_addresses(net, count, taken):
+    """`count` addresses in `net` that share as few leading bits as possible
+    with each other and with `taken` (a set of ip_address, extended in place).
+
+    The nim-libp2p registrar makes an advertiser wait advertExpiry * ipSim, and
+    ipSim (iptree.ipScore) counts the tree levels on the advertiser's path whose
+    counter exceeds total / 2^depth. Inside one /8 with fewer than 256 addresses
+    in the tree, that is every level of the longest prefix shared with any held
+    ad, so the wait follows the longest common prefix: pick each address to keep
+    that as short as possible. Candidates: 2^7 prefixes of the leading free bits
+    in bit-reversed order (coarse splits first), each with the host part 1.20."""
+    free = 32 - net.prefixlen
+    bits = min(7, free - 9)
+    shift = free - bits
+    cands = []
+    for k in range(1 << bits):
+        r = int(f"{k:0{bits}b}"[::-1], 2)
+        ip = net[(r << shift) | 0x114]
+        if (int(ip) - int(net.network_address) >= INFRA_HOSTS
+                and str(ip) not in RESERVED_IPS):
+            cands.append(ip)
+
+    def shared(a):
+        return max((32 - (int(a) ^ int(b)).bit_length() for b in taken), default=0)
+
+    out = []
+    for _ in range(count):
+        free_cands = [c for c in cands if c not in taken]
+        if not free_cands:
+            _fail(f"network.spread: no address left in {net} for {count} nodes")
+        best = min(free_cands, key=shared)
+        taken.add(best)
+        out.append(str(best))
+    return out
 
 
 def libp2p_privkey(g):
